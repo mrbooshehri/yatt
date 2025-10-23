@@ -1,171 +1,202 @@
 #!/usr/bin/env bash
-# yatt - Yet Another Time Tracker (pure bash)
+set -euo pipefail
 
-DATA_DIR="$HOME/.yatt"
-PROJECTS_DIR="$DATA_DIR/projects"
+YATT_DIR="$HOME/.yatt"
+PROJECTS_DIR="$YATT_DIR/projects"
+
 mkdir -p "$PROJECTS_DIR"
 
-usage() {
-    echo "Usage: yatt <command> [arguments]"
-    echo
-    echo "Commands:"
-    echo "  project create <name> [description] [--tags tag1 tag2 ...]"
-    echo "  project list"
-    echo "  project tags <name> [add|remove|list] [tags...]"
-    echo "  tag list <tag>   List all projects that have a specific tag"
-    echo
+# -----------------------------
+# Helper functions
+# -----------------------------
+
+json_file() {
+    local project="$1"
+    echo "$PROJECTS_DIR/$project.json"
 }
 
-# ---------- Helper: read tags from JSON-like file ----------
-read_tags() {
-    local file="$1"
-    grep '"tags"' "$file" | sed -E 's/.*\[(.*)\].*/\1/' | tr -d '"' | tr ',' ' ' | xargs
+project_exists() {
+    [[ -f "$(json_file "$1")" ]]
 }
 
-# ---------- Project creation ----------
-project_create() {
-    local name="$1"
-    shift
-    local description=""
-    local tags=()
+load_project() {
+    local project="$1"
+    jq '.' "$(json_file "$project")"
+}
 
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --tags)
-                shift
-                while [[ $# -gt 0 && "$1" != "--"* ]]; do
-                    tags+=("$1")
-                    shift
-                done
-                ;;
-            *)
-                if [[ -z "$description" ]]; then
-                    description="$1"
-                fi
-                shift
-                ;;
-        esac
-    done
+save_project() {
+    local project="$1"
+    local tmp
+    tmp=$(mktemp)
+    jq '.' >"$tmp"
+    mv "$tmp" "$(json_file "$project")"
+}
 
-    [[ -z "$name" ]] && { echo "Error: project name is required."; exit 1; }
+# -----------------------------
+# Commands
+# -----------------------------
 
-    local project_file="$PROJECTS_DIR/${name}.json"
-    [[ -f "$project_file" ]] && { echo "Error: project '$name' already exists."; exit 1; }
+cmd_project_create() {
+    local key="$1"
+    local desc="${2:-}"
 
-    local unique_tags=($(printf "%s\n" "${tags[@]}" | awk '!seen[$0]++'))
-    local tags_json
-    if [[ ${#unique_tags[@]} -gt 0 ]]; then
-        tags_json=$(printf '"%s", ' "${unique_tags[@]}")
-        tags_json="[${tags_json%, }]"
-    else
-        tags_json="[]"
+    if [[ "$key" == *"@"* ]]; then
+        echo "Use 'yatt submodule create $key <desc>' to create submodules"
+        exit 1
     fi
 
-    cat > "$project_file" <<EOF
-{
-  "name": "$name",
-  "description": "${description:-No description provided}",
-  "tags": $tags_json,
-  "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-}
-EOF
-    echo "✅ Project '$name' created successfully."
+    if project_exists "$key"; then
+        echo "Project '$key' already exists"
+        exit 1
+    fi
+
+    jq -n \
+      --arg key "$key" \
+      --arg desc "$desc" \
+      '{key: $key, description: $desc, tags: [], submodules: []}' \
+      > "$(json_file "$key")"
+
+    echo "✅ Project '$key' created."
 }
 
-# ---------- Project list ----------
-project_list() {
-    shopt -s nullglob
+cmd_submodule_create() {
+    local full="$1"
+    local desc="${2:-}"
+
+    if [[ "$full" != *@* ]]; then
+        echo "Submodule name must be MODULE@PARENT"
+        exit 1
+    fi
+
+    local module="${full%@*}"
+    local parent="${full#*@}"
+
+    if ! project_exists "$parent"; then
+        echo "Parent project '$parent' does not exist"
+        exit 1
+    fi
+
+    # check if module exists
+    if jq -e --arg key "$module" '.submodules[] | select(.key==$key)' "$(json_file "$parent")" >/dev/null; then
+        echo "Submodule '$module' already exists in '$parent'"
+        exit 1
+    fi
+
+    # add submodule
+    tmp=$(mktemp)
+    jq --arg key "$module" --arg desc "$desc" \
+       '.submodules += [{"key": $key, "description": $desc, "tags": []}]' \
+       "$(json_file "$parent")" > "$tmp"
+    mv "$tmp" "$(json_file "$parent")"
+
+    echo "✅ Submodule '$module@$parent' created."
+}
+
+cmd_project_list() {
     echo "📂 Projects:"
-    for file in "$PROJECTS_DIR"/*.json; do
-        echo "  - $(basename "$file" .json)"
+    for f in "$PROJECTS_DIR"/*.json; do
+        [[ ! -f "$f" ]] && continue
+        parent=$(jq -r '.key' "$f")
+        echo "  - $parent"
+        jq -r '.submodules[]?.key' "$f" | while read mod; do
+            echo "      * $mod"
+        done
     done
 }
 
-# ---------- Tag operations ----------
-project_tags() {
-    local name="$1"
-    local action="$2"
-    shift 2
-    local file="$PROJECTS_DIR/${name}.json"
-    [[ -f "$file" ]] || { echo "Error: project '$name' not found."; exit 1; }
+cmd_tags_add() {
+    local full="$1"
+    local tag="$2"
 
-    case "$action" in
-        list)
-            local tags=($(read_tags "$file"))
-            if [[ ${#tags[@]} -eq 0 ]]; then
-                echo "(no tags)"
-            else
-                echo "${tags[*]}"
-            fi
-            ;;
-        add)
-            local new_tags=("$@")
-            [[ ${#new_tags[@]} -eq 0 ]] && { echo "No tags provided."; exit 1; }
+    if [[ "$full" == *@* ]]; then
+        local module="${full%@*}"
+        local parent="${full#*@}"
+        [[ ! -f "$(json_file "$parent")" ]] && { echo "Parent project '$parent' not found"; exit 1; }
 
-            local current_tags=($(read_tags "$file"))
-            local all_tags=("${current_tags[@]}" "${new_tags[@]}")
-            local unique_tags=($(printf "%s\n" "${all_tags[@]}" | awk '!seen[$0]++'))
+        # add tag to submodule
+        tmp=$(mktemp)
+        jq --arg mod "$module" --arg tag "$tag" '
+            (.submodules[] | select(.key==$mod) | .tags) |= (if index($tag) then . else . + [$tag] end)
+        ' "$(json_file "$parent")" > "$tmp"
+        mv "$tmp" "$(json_file "$parent")"
+        echo "✅ Tag '$tag' added to submodule '$module@$parent'."
 
-            local new_tags_json=$(printf '"%s", ' "${unique_tags[@]}")
-            new_tags_json="[${new_tags_json%, }]"
-            sed -i "s|\"tags\": .*|\"tags\": ${new_tags_json},|" "$file"
-            echo "✅ Tags updated for '$name'."
-            ;;
-        remove)
-            local rm_tags=("$@")
-            [[ ${#rm_tags[@]} -eq 0 ]] && { echo "No tags provided."; exit 1; }
+    else
+        local project="$full"
+        [[ ! -f "$(json_file "$project")" ]] && { echo "Project '$project' not found"; exit 1; }
 
-            local current_tags=($(read_tags "$file"))
-            local remaining=()
-            for tag in "${current_tags[@]}"; do
-                skip=false
-                for rm in "${rm_tags[@]}"; do
-                    [[ "$tag" == "$rm" ]] && skip=true
-                done
-                $skip || remaining+=("$tag")
-            done
-            local new_tags_json=$(printf '"%s", ' "${remaining[@]}")
-            new_tags_json="[${new_tags_json%, }]"
-            sed -i "s|\"tags\": .*|\"tags\": ${new_tags_json},|" "$file"
-            echo "✅ Tags removed from '$name'."
-            ;;
-        *)
-            echo "Usage: yatt project tags <name> [add|remove|list] [tags...]"
-            ;;
-    esac
+        tmp=$(mktemp)
+        jq --arg tag "$tag" '
+            (.tags) |= (if index($tag) then . else . + [$tag] end)
+        ' "$(json_file "$project")" > "$tmp"
+        mv "$tmp" "$(json_file "$project")"
+        echo "✅ Tag '$tag' added to project '$project'."
+    fi
 }
 
-# ---------- Tag-based project search ----------
-tag_list_projects() {
+cmd_tags_list() {
+    local full="$1"
+
+    if [[ "$full" == *@* ]]; then
+        local module="${full%@*}"
+        local parent="${full#*@}"
+        jq -r --arg mod "$module" '.submodules[] | select(.key==$mod) | .tags[]' "$(json_file "$parent")"
+
+    else
+        jq -r '.tags[]' "$(json_file "$full")"
+    fi
+}
+
+cmd_tags_by() {
     local tag="$1"
-    [[ -z "$tag" ]] && { echo "Error: tag name required."; exit 1; }
-
-    echo "🔖 Projects with tag '$tag':"
-    local found=false
-    for file in "$PROJECTS_DIR"/*.json; do
-        if grep -q "\"$tag\"" "$file"; then
-            echo "  - $(basename "$file" .json)"
-            found=true
+    echo "Projects/submodules with tag '$tag':"
+    for f in "$PROJECTS_DIR"/*.json; do
+        [[ ! -f "$f" ]] && continue
+        proj=$(jq -r '.key' "$f")
+        # check project
+        if jq -e --arg t "$tag" '.tags | index($t)' "$f" >/dev/null; then
+            echo "  - $proj"
         fi
+        # check submodules
+        jq -r --arg t "$tag" --arg parent "$proj" '.submodules[] | select(.tags|index($t)) | "\(.key)@'"$proj"'"' "$f" | while read sm; do
+            echo "      * $sm"
+        done
     done
-    $found || echo "  (none)"
 }
 
-# ---------- CLI Routing ----------
+# -----------------------------
+# Main
+# -----------------------------
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <command> ..."
+    exit 1
+fi
+
 case "$1" in
     project)
-        case "$2" in
-            create) shift 2; project_create "$@";;
-            list) shift 2; project_list;;
-            tags) shift 2; project_tags "$@";;
-            *) usage;;
-        esac
+        shift
+        case "$1" in
+            create) shift; cmd_project_create "$@" ;;
+            list) shift; cmd_project_list ;;
+            tags)
+                shift
+                case "$1" in
+                    add) shift; cmd_tags_add "$@" ;;
+                    list) shift; cmd_tags_list "$@" ;;
+                    by) shift; cmd_tags_by "$@" ;;
+                    *) echo "Unknown tags command"; exit 1 ;;
+                esac ;;
+            *) echo "Unknown project command"; exit 1 ;;
+        esac ;;
+    submodule)
+        shift
+        case "$1" in
+            create) shift; cmd_submodule_create "$@" ;;
+            *) echo "Unknown submodule command"; exit 1 ;;
+        esac ;;
+    *)
+        echo "Unknown command"
+        exit 1
         ;;
-    tag)
-        case "$2" in
-            list) shift 2; tag_list_projects "$@";;
-            *) usage;;
-        esac
-        ;;
-    *) usage;;
 esac
