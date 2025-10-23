@@ -317,36 +317,42 @@ track_start() {
 track_stop() {
     ensure_tracking_file
 
-    if ! grep -q '"active": {' "$TRACK_FILE"; then
-        echo "❌ No active tracking session."
+    # Read the active session
+    local active_line
+    active_line=$(grep -oP '"active": *\{[^}]*\}' "$TRACK_FILE")
+
+    # If no active session
+    if [[ -z "$active_line" || "$active_line" == *"null"* ]]; then
+        echo "❌ No active session to stop."
         return 1
     fi
 
-    local name start_time
-    name=$(grep -oP '"name": *"\K[^"]+' "$TRACK_FILE")
-    start_time=$(grep -oP '"start": *"\K[^"]+' "$TRACK_FILE")
-
-    local end_time
+    # Extract name and start timestamp
+    local name start_time end_time
+    name=$(echo "$active_line" | grep -oP '"name": *"\K[^"]+')
+    start_time=$(echo "$active_line" | grep -oP '"start": *"\K[^"]+')
     end_time=$(date -Iseconds)
 
-    local start_epoch end_epoch duration
+    # Calculate elapsed seconds
+    local start_epoch now_epoch elapsed
     start_epoch=$(date -d "$start_time" +%s)
-    end_epoch=$(date -d "$end_time" +%s)
-    duration=$(( end_epoch - start_epoch ))
+    now_epoch=$(date +%s)
+    elapsed=$(( now_epoch - start_epoch ))
 
-    # Clear active section and append to logs
-    tmp=$(mktemp)
-    {
-        echo '{'
-        echo '  "active": null,'
-        echo '  "logs": ['
-        grep -o '{.*}' "$TRACK_FILE" | grep '"logs":' -A9999 | grep -v '"active"' | sed '1d;$d'
-        echo "    {\"name\": \"$name\", \"start\": \"$start_time\", \"end\": \"$end_time\", \"duration_sec\": $duration}"
-        echo '  ]'
-        echo '}'
-    } > "$tmp" && mv "$tmp" "$TRACK_FILE"
+    # Append to logs
+    # Read existing logs
+    local logs
+    logs=$(jq '.logs' "$TRACK_FILE")
 
-    echo "⏹️ Stopped tracking '$name'. Duration: $((duration / 60)) min $((duration % 60)) sec."
+    # Create new log entry
+    local new_log
+    new_log=$(jq -n --arg name "$name" --arg start "$start_time" --arg end "$end_time" --arg elapsed "$elapsed" \
+        '{name: $name, start: $start, end: $end, elapsed_seconds: ($elapsed|tonumber)}')
+
+    # Update tracking.json: append log and clear active
+    jq --argjson newlog "$new_log" '.logs += [$newlog] | .active = null' "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
+
+    echo "✅ Stopped tracking '$name'. Duration: $elapsed seconds."
 }
 
 track_status() {
