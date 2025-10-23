@@ -234,7 +234,8 @@ tags_list() {
 }
 
 tags_by() {
-    local tag="$1"
+    local tag="${1:-}"
+    [[ -z "$tag" ]] && { echo "❌ Usage: tags by <tag>"; return 1; }
     echo "Projects/submodules with tag '$tag':"
 
     for f in "$PROJECTS_DIR"/*.json; do
@@ -392,7 +393,7 @@ track_status() {
 }
 
 track_list() {
-    local project="$1"
+    local project="${1:-}"
     local logs
     logs=$(jq -c '.logs[]' "$TRACK_FILE")
 
