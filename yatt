@@ -4,6 +4,7 @@ set -euo pipefail
 
 YATT_DIR="$HOME/.yatt"
 PROJECTS_DIR="$YATT_DIR/projects"
+TRACK_FILE="$HOME/.yatt/tracking.json"
 
 mkdir -p "$PROJECTS_DIR"
 
@@ -42,6 +43,13 @@ Submodule management:
 
 Other:
   help                                      Show this help
+
+Examples:
+  ./yatt project create myapp "Main backend project"
+  ./yatt submodule create auth@myapp "Authentication service"
+  ./yatt project tags add myapp backend
+  ./yatt project tags by backend
+  ./yatt project delete myapp
 EOF
 }
 
@@ -255,6 +263,92 @@ tags_by() {
 }
 
 # -------------------------------
+# Tracing
+# -------------------------------
+ensure_tracking_file() {
+    [[ -f "$TRACK_FILE" ]] || echo '{"active": null, "logs": []}' > "$TRACK_FILE"
+}
+
+track_start() {
+    local name="$1"
+    [[ -z "$name" ]] && { echo "❌ Usage: yatt track start <project|module@project>"; return 1; }
+
+    ensure_tracking_file
+
+    # Check if active session exists
+    if grep -q '"active": {' "$TRACK_FILE"; then
+        echo "❌ A session is already active. Stop it first with 'yatt track stop'."
+        return 1
+    fi
+
+    # Check if project exists
+    local project_file
+    if [[ "$name" == *@* ]]; then
+        local parent="${name#*@}"
+        project_file="$PROJECTS_DIR/${parent}.json"
+        [[ ! -f "$project_file" ]] && { echo "❌ Project '$parent' not found."; return 1; }
+    else
+        project_file="$PROJECTS_DIR/${name}.json"
+        [[ ! -f "$project_file" ]] && { echo "❌ Project '$name' not found."; return 1; }
+    fi
+
+    local start_time
+    start_time=$(date -Iseconds)
+
+    # Write active session (don’t overwrite logs)
+    awk -v n="$name" -v t="$start_time" '
+        BEGIN { active_written=0 }
+        {
+            if ($0 ~ /"active": null/) {
+                print "  \"active\": {\"name\": \"" n "\", \"start\": \"" t "\"},"
+                active_written=1
+            } else {
+                print
+            }
+        }
+        END {
+            if (!active_written) print "  \"active\": {\"name\": \"" n "\", \"start\": \"" t "\"},"
+        }
+    ' "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
+
+    echo "▶️ Tracking started for '$name' at $start_time"
+}
+
+track_stop() {
+    ensure_tracking_file
+
+    if ! grep -q '"active": {' "$TRACK_FILE"; then
+        echo "❌ No active tracking session."
+        return 1
+    fi
+
+    local name start_time
+    name=$(grep -oP '"name": *"\K[^"]+' "$TRACK_FILE")
+    start_time=$(grep -oP '"start": *"\K[^"]+' "$TRACK_FILE")
+
+    local end_time
+    end_time=$(date -Iseconds)
+
+    local start_epoch end_epoch duration
+    start_epoch=$(date -d "$start_time" +%s)
+    end_epoch=$(date -d "$end_time" +%s)
+    duration=$(( end_epoch - start_epoch ))
+
+    # Clear active section and append to logs
+    tmp=$(mktemp)
+    {
+        echo '{'
+        echo '  "active": null,'
+        echo '  "logs": ['
+        grep -o '{.*}' "$TRACK_FILE" | grep '"logs":' -A9999 | grep -v '"active"' | sed '1d;$d'
+        echo "    {\"name\": \"$name\", \"start\": \"$start_time\", \"end\": \"$end_time\", \"duration_sec\": $duration}"
+        echo '  ]'
+        echo '}'
+    } > "$tmp" && mv "$tmp" "$TRACK_FILE"
+
+    echo "⏹️ Stopped tracking '$name'. Duration: $((duration / 60)) min $((duration % 60)) sec."
+}
+# -------------------------------
 # Main
 # -------------------------------
 main() {
@@ -306,6 +400,17 @@ main() {
                     echo "❌ Unknown project subcommand: $sub"
                     help
                     ;;
+            esac
+            ;;
+
+        track)
+            local sub="$1"; shift || true
+            case "$sub" in
+                start) track_start "$@" ;;
+                stop) track_stop ;;
+                status) track_status ;;
+                log) track_log "$@" ;;
+                *) help ;;
             esac
             ;;
 
