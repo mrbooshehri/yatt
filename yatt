@@ -29,13 +29,15 @@ Project management:
   project create <name> <description>       Create a new project
   project list                              List projects and modules
 
+Tag management:
+  project tags add <project|module@project> <tag>     Add a tag (duplicates prevented)
+  project tags remove <project|module@project> <tag>  Remove a tag
+  project tags list <project|module@project>         List tags
+  project tags by <tag>                              List all projects/submodules with the tag
+
 Submodule management:
   submodule create <name>@<project> <description>   Create a submodule under a project
-
-Tag management:
-  project tags add <project|module@project> <tag>  Add a tag (duplicates prevented)
-  project tags list <project|module@project>       List tags
-  project tags by <tag>                            List all projects/submodules with the tag
+  submodule remove <name>@<project>                 Remove a submodule
 
 Other:
   help                                      Show this help
@@ -100,6 +102,19 @@ submodule_create() {
     echo "✅ Submodule '$module@$parent' created."
 }
 
+submodule_remove() {
+    local full="$1"
+    local module="${full%@*}"
+    local parent="${full#*@}"
+    local file="$PROJECTS_DIR/$parent.json"
+
+    [[ -f "$file" ]] || { echo "Parent project '$parent' does not exist."; exit 1; }
+
+    jq --arg m "$module" '.modules |= map(select(.name != $m))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    echo "✅ Submodule '$module@$parent' removed."
+}
+
+
 # -------------------------------
 # Tag commands
 # -------------------------------
@@ -143,6 +158,33 @@ tags_add() {
         json=$(echo "$json" | jq --arg t "$tag" '.tags += [$t]')
         json_write "$file" "$json"
         echo "✅ Tag '$tag' added to project '$key'."
+    fi
+}
+tags_remove() {
+    local key="$1"
+    local tag="$2"
+
+    if [[ "$key" == *@* ]]; then
+        # Submodule
+        local module="${key%@*}"
+        local parent="${key#*@}"
+        local file="$PROJECTS_DIR/$parent.json"
+        [[ -f "$file" ]] || { echo "Parent project '$parent' does not exist"; exit 1; }
+
+        jq --arg m "$module" --arg t "$tag" '
+            .modules |= map(
+                if .name==$m then .tags |= map(select(. != $t)) else . end
+            )
+        ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+        echo "✅ Tag '$tag' removed from submodule '$module@$parent'."
+
+    else
+        # Project
+        local file="$PROJECTS_DIR/$key.json"
+        [[ -f "$file" ]] || { echo "Project '$key' does not exist"; exit 1; }
+
+        jq --arg t "$tag" '.tags |= map(select(. != $t))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+        echo "✅ Tag '$tag' removed from project '$key'."
     fi
 }
 
@@ -197,34 +239,75 @@ tags_by() {
 main() {
     [[ $# -eq 0 ]] && { help; exit 0; }
 
-    local cmd="$1"; shift
+    local cmd="$1"; shift || true
     case "$cmd" in
-        help) help ;;
+        help|-h|--help)
+            help
+            ;;
+
         project)
             local sub="$1"; shift || true
             case "$sub" in
-                create) project_create "$@" ;;
-                list) project_list ;;
+                create)
+                    project_create "$@"
+                    ;;
+                list)
+                    project_list
+                    ;;
                 tags)
                     local tagcmd="$1"; shift || true
                     case "$tagcmd" in
-                        add) tags_add "$@" ;;
-                        list) tags_list "$@" ;;
-                        by) tags_by "$@" ;;
-                        *) help ;;
+                        add)
+                            tags_add "$@"
+                            ;;
+                        remove)
+                            tags_remove "$@"
+                            ;;
+                        list)
+                            tags_list "$@"
+                            ;;
+                        by)
+                            tags_by "$@"
+                            ;;
+                        search)
+                            tags_search_all "$@"
+                            ;;
+                        *)
+                            echo "❌ Unknown tag command: $tagcmd"
+                            help
+                            ;;
                     esac
                     ;;
-                *) help ;;
+                *)
+                    echo "❌ Unknown project subcommand: $sub"
+                    help
+                    ;;
             esac
             ;;
+
         submodule)
             local sub="$1"; shift || true
             case "$sub" in
-                create) submodule_create "$@" ;;
-                *) help ;;
+                create)
+                    submodule_create "$@"
+                    ;;
+                remove)
+                    submodule_remove "$@"
+                    ;;
+                list)
+                    submodule_list "$@"
+                    ;;
+                *)
+                    echo "❌ Unknown submodule subcommand: $sub"
+                    help
+                    ;;
             esac
             ;;
-        *) help ;;
+        
+        *)
+            echo "❌ Unknown command: $cmd"
+            help
+            ;;
     esac
 }
 
