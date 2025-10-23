@@ -348,6 +348,43 @@ track_stop() {
 
     echo "⏹️ Stopped tracking '$name'. Duration: $((duration / 60)) min $((duration % 60)) sec."
 }
+
+track_status() {
+    ensure_tracking_file
+
+    # Extract the 'active' object
+    local active_line
+    active_line=$(grep -oP '"active": *\{[^}]*\}' "$TRACK_FILE")
+
+    # If no active session
+    if [[ -z "$active_line" || "$active_line" == *"null"* ]]; then
+        echo "🟢 No active tracking session."
+        return 0
+    fi
+
+    # Extract name and start timestamp
+    local name start_time
+    name=$(echo "$active_line" | grep -oP '"name": *"\K[^"]+')
+    start_time=$(echo "$active_line" | grep -oP '"start": *"\K[^"]+')
+
+    # Convert start_time to epoch
+    local start_epoch now_epoch elapsed
+    start_epoch=$(date -d "$start_time" +%s 2>/dev/null) || {
+        echo "❌ Invalid start timestamp: $start_time"
+        return 1
+    }
+    now_epoch=$(date +%s)
+    elapsed=$(( now_epoch - start_epoch ))
+
+    local h=$((elapsed / 3600))
+    local m=$(( (elapsed % 3600) / 60 ))
+    local s=$((elapsed % 60))
+
+    echo "⏳ Tracking: $name"
+    echo "   Started:  $start_time"
+    echo "   Elapsed:  ${h}h ${m}m ${s}s"
+}
+
 # -------------------------------
 # Main
 # -------------------------------
