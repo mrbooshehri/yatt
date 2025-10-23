@@ -27,6 +27,7 @@ Commands:
 
 Project management:
   project create <name> <description>       Create a new project
+  project remove <name>                      Delete an existing project (asks for confirmation)
   project list                              List projects and modules
 
 Tag management:
@@ -58,6 +59,26 @@ project_create() {
 
     jq -n --arg n "$name" --arg d "$desc" '{name:$n, description:$d, tags:[], modules:[]}' > "$file"
     echo "✅ Project '$name' created."
+}
+
+project_remove() {
+    local name="$1"
+
+    [[ -z "$name" ]] && { echo "❌ Usage: project remove <name>"; exit 1; }
+
+    local project_file="$PROJECTS_DIR/${name}.json"
+
+    if [[ ! -f "$project_file" ]]; then
+        echo "❌ Project '$name' not found."
+        exit 1
+    fi
+
+    # Confirm before deletion
+    read -p "⚠️  Are you sure you want to delete project '$name'? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "❌ Operation cancelled."; exit 0; }
+
+    rm -f "$project_file"
+    echo "🗑️  Project '$name' removed."
 }
 
 project_list() {
@@ -250,6 +271,9 @@ main() {
             case "$sub" in
                 create)
                     project_create "$@"
+                    ;;
+                remove)
+                    project_remove "$@"
                     ;;
                 list)
                     project_list
