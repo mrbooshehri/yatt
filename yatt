@@ -391,6 +391,81 @@ track_status() {
     echo "   Elapsed:  ${h}h ${m}m ${s}s"
 }
 
+track_list() {
+    local project="$1"
+    local logs
+    logs=$(jq -c '.logs[]' "$TRACK_FILE")
+
+    for entry in $logs; do
+        local name start end duration
+        name=$(echo "$entry" | jq -r '.name')
+        [[ -n "$project" && "$name" != "$project" ]] && continue
+        start=$(echo "$entry" | jq -r '.start')
+        end=$(echo "$entry" | jq -r '.end // empty')
+
+        if [[ -n "$end" ]]; then
+            duration=$(( $(date -d "$end" +%s) - $(date -d "$start" +%s) ))
+        else
+            duration="active"
+        fi
+
+        echo "Project/Submodule: $name"
+        echo "  Start: $start"
+        echo "  End: ${end:-active}"
+        if [[ "$duration" != "active" ]]; then
+            printf "  Duration: %02d:%02d:%02d\n" $((duration/3600)) $(((duration%3600)/60)) $((duration%60))
+        else
+            echo "  Duration: active"
+        fi
+        echo
+    done
+}
+
+
+format_seconds() {
+    local T=$1
+    local H M S
+    H=$((T/3600))
+    M=$(( (T%3600)/60 ))
+    S=$((T%60))
+    printf "%02d:%02d:%02d\n" $H $M $S
+}
+
+track_report() {
+    local date_filter="${1:-$(date +%F)}"
+    local logs
+    logs=$(jq -c '.logs[]' "$TRACK_FILE")
+    declare -A totals
+
+    echo "📅 Report for $date_filter"
+
+    for entry in $logs; do
+        local name start end duration day
+        name=$(echo "$entry" | jq -r '.name')
+        start=$(echo "$entry" | jq -r '.start')
+        end=$(echo "$entry" | jq -r '.end // empty')
+        day=$(date -d "$start" +%F)
+
+        [[ "$day" != "$date_filter" ]] && continue
+        if [[ -n "$end" ]]; then
+            duration=$(( $(date -d "$end" +%s) - $(date -d "$start" +%s) ))
+        else
+            duration=0
+        fi
+        totals["$name"]=$(( ${totals["$name"]:-0} + duration ))
+    done
+
+    local total_sec=0
+    for name in "${!totals[@]}"; do
+        local d=${totals[$name]}
+        total_sec=$((total_sec + d))
+        printf "  - %s: %02d:%02d:%02d\n" "$name" $((d/3600)) $(((d%3600)/60)) $((d%60))
+    done
+
+    printf "Total time: %02d:%02d:%02d\n" $((total_sec/3600)) $(((total_sec%3600)/60)) $((total_sec%60))
+}
+
+
 # -------------------------------
 # Main
 # -------------------------------
@@ -452,7 +527,8 @@ main() {
                 start) track_start "$@" ;;
                 stop) track_stop ;;
                 status) track_status ;;
-                log) track_log "$@" ;;
+                list) track_list "$@" ;;
+                report) track_report "$@" ;;
                 *) help ;;
             esac
             ;;
