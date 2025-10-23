@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# yatt - Yet Another Time Tracker (pure bash)
+
+DATA_DIR="$HOME/.yatt"
+PROJECTS_DIR="$DATA_DIR/projects"
+mkdir -p "$PROJECTS_DIR"
+
+usage() {
+    echo "Usage: yatt <command> [arguments]"
+    echo
+    echo "Commands:"
+    echo "  project create <name> [description] [--tags tag1 tag2 ...]"
+    echo "  project list"
+    echo "  project tags <name> [add|remove|list] [tags...]"
+    echo "  tag list <tag>   List all projects that have a specific tag"
+    echo
+}
+
+# ---------- Helper: read tags from JSON-like file ----------
+read_tags() {
+    local file="$1"
+    grep '"tags"' "$file" | sed -E 's/.*\[(.*)\].*/\1/' | tr -d '"' | tr ',' ' ' | xargs
+}
+
+# ---------- Project creation ----------
+project_create() {
+    local name="$1"
+    shift
+    local description=""
+    local tags=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tags)
+                shift
+                while [[ $# -gt 0 && "$1" != "--"* ]]; do
+                    tags+=("$1")
+                    shift
+                done
+                ;;
+            *)
+                if [[ -z "$description" ]]; then
+                    description="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "$name" ]] && { echo "Error: project name is required."; exit 1; }
+
+    local project_file="$PROJECTS_DIR/${name}.json"
+    [[ -f "$project_file" ]] && { echo "Error: project '$name' already exists."; exit 1; }
+
+    local unique_tags=($(printf "%s\n" "${tags[@]}" | awk '!seen[$0]++'))
+    local tags_json
+    if [[ ${#unique_tags[@]} -gt 0 ]]; then
+        tags_json=$(printf '"%s", ' "${unique_tags[@]}")
+        tags_json="[${tags_json%, }]"
+    else
+        tags_json="[]"
+    fi
+
+    cat > "$project_file" <<EOF
+{
+  "name": "$name",
+  "description": "${description:-No description provided}",
+  "tags": $tags_json,
+  "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+    echo "✅ Project '$name' created successfully."
+}
+
+# ---------- Project list ----------
+project_list() {
+    shopt -s nullglob
+    echo "📂 Projects:"
+    for file in "$PROJECTS_DIR"/*.json; do
+        echo "  - $(basename "$file" .json)"
+    done
+}
+
+# ---------- Tag operations ----------
+project_tags() {
+    local name="$1"
+    local action="$2"
+    shift 2
+    local file="$PROJECTS_DIR/${name}.json"
+    [[ -f "$file" ]] || { echo "Error: project '$name' not found."; exit 1; }
+
+    case "$action" in
+        list)
+            local tags=($(read_tags "$file"))
+            if [[ ${#tags[@]} -eq 0 ]]; then
+                echo "(no tags)"
+            else
+                echo "${tags[*]}"
+            fi
+            ;;
+        add)
+            local new_tags=("$@")
+            [[ ${#new_tags[@]} -eq 0 ]] && { echo "No tags provided."; exit 1; }
+
+            local current_tags=($(read_tags "$file"))
+            local all_tags=("${current_tags[@]}" "${new_tags[@]}")
+            local unique_tags=($(printf "%s\n" "${all_tags[@]}" | awk '!seen[$0]++'))
+
+            local new_tags_json=$(printf '"%s", ' "${unique_tags[@]}")
+            new_tags_json="[${new_tags_json%, }]"
+            sed -i "s|\"tags\": .*|\"tags\": ${new_tags_json},|" "$file"
+            echo "✅ Tags updated for '$name'."
+            ;;
+        remove)
+            local rm_tags=("$@")
+            [[ ${#rm_tags[@]} -eq 0 ]] && { echo "No tags provided."; exit 1; }
+
+            local current_tags=($(read_tags "$file"))
+            local remaining=()
+            for tag in "${current_tags[@]}"; do
+                skip=false
+                for rm in "${rm_tags[@]}"; do
+                    [[ "$tag" == "$rm" ]] && skip=true
+                done
+                $skip || remaining+=("$tag")
+            done
+            local new_tags_json=$(printf '"%s", ' "${remaining[@]}")
+            new_tags_json="[${new_tags_json%, }]"
+            sed -i "s|\"tags\": .*|\"tags\": ${new_tags_json},|" "$file"
+            echo "✅ Tags removed from '$name'."
+            ;;
+        *)
+            echo "Usage: yatt project tags <name> [add|remove|list] [tags...]"
+            ;;
+    esac
+}
+
+# ---------- Tag-based project search ----------
+tag_list_projects() {
+    local tag="$1"
+    [[ -z "$tag" ]] && { echo "Error: tag name required."; exit 1; }
+
+    echo "🔖 Projects with tag '$tag':"
+    local found=false
+    for file in "$PROJECTS_DIR"/*.json; do
+        if grep -q "\"$tag\"" "$file"; then
+            echo "  - $(basename "$file" .json)"
+            found=true
+        fi
+    done
+    $found || echo "  (none)"
+}
+
+# ---------- CLI Routing ----------
+case "$1" in
+    project)
+        case "$2" in
+            create) shift 2; project_create "$@";;
+            list) shift 2; project_list;;
+            tags) shift 2; project_tags "$@";;
+            *) usage;;
+        esac
+        ;;
+    tag)
+        case "$2" in
+            list) shift 2; tag_list_projects "$@";;
+            *) usage;;
+        esac
+        ;;
+    *) usage;;
+esac
