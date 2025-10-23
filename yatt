@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# YATT - Yet Another Time Tracker
+# Pure bash implementation for projects, submodules, and tags
+
 set -euo pipefail
 
 YATT_DIR="$HOME/.yatt"
@@ -6,197 +9,228 @@ PROJECTS_DIR="$YATT_DIR/projects"
 
 mkdir -p "$PROJECTS_DIR"
 
-# -----------------------------
+# -----------------------
 # Helper functions
-# -----------------------------
+# -----------------------
 
-json_file() {
-    local project="$1"
-    echo "$PROJECTS_DIR/$project.json"
+show_help() {
+    cat <<EOF
+🕒 YATT (Yet Another Time Tracker) - Help
+
+Usage: $0 <command> [arguments] [options]
+
+Commands:
+
+Project Management:
+  project create <KEY> "<DESCRIPTION>"          Create a new project
+  project list                                  List all projects and submodules
+  project tags add <PROJECT|SUBMODULE> <TAG>   Add a tag to a project or submodule
+  project tags list <PROJECT|SUBMODULE>        List tags for a project or submodule
+  project tags by <TAG>                        List all projects/submodules with a tag
+
+Submodule Management:
+  submodule create <KEY>@<PROJECT> "<DESC>"   Create a submodule under a project
+
+Other:
+  help                                         Show this help
+  version                                      Show YATT version
+
+Examples:
+  $0 project create make-coffee "Coffee project"
+  $0 submodule create grind-beans@make-coffee "Grinding module"
+  $0 project tags add make-coffee morning
+  $0 project tags by morning
+EOF
 }
 
-project_exists() {
-    [[ -f "$(json_file "$1")" ]]
+# JSON helpers
+json_write() {
+    local file="$1"
+    local content="$2"
+    echo "$content" > "$file"
 }
 
-load_project() {
-    local project="$1"
-    jq '.' "$(json_file "$project")"
+json_read() {
+    local file="$1"
+    cat "$file"
 }
 
-save_project() {
-    local project="$1"
-    local tmp
-    tmp=$(mktemp)
-    jq '.' >"$tmp"
-    mv "$tmp" "$(json_file "$project")"
+json_escape() {
+    printf '%s' "$1" | sed 's/"/\\"/g'
 }
 
-# -----------------------------
-# Commands
-# -----------------------------
+# -----------------------
+# Project functions
+# -----------------------
 
-cmd_project_create() {
+project_create() {
     local key="$1"
-    local desc="${2:-}"
+    local desc="$2"
+    local file="$PROJECTS_DIR/$key.json"
 
-    if [[ "$key" == *"@"* ]]; then
-        echo "Use 'yatt submodule create $key <desc>' to create submodules"
-        exit 1
-    fi
-
-    if project_exists "$key"; then
+    if [[ -f "$file" ]]; then
         echo "Project '$key' already exists"
         exit 1
     fi
 
-    jq -n \
-      --arg key "$key" \
-      --arg desc "$desc" \
-      '{key: $key, description: $desc, tags: [], submodules: []}' \
-      > "$(json_file "$key")"
-
+    local json="{\"description\": \"$(json_escape "$desc")\", \"modules\": [], \"tags\": []}"
+    json_write "$file" "$json"
     echo "✅ Project '$key' created."
 }
 
-cmd_submodule_create() {
-    local full="$1"
-    local desc="${2:-}"
+submodule_create() {
+    local key_at_parent="$1"
+    local desc="$2"
 
-    if [[ "$full" != *@* ]]; then
-        echo "Submodule name must be MODULE@PARENT"
+    if [[ "$key_at_parent" != *@* ]]; then
+        echo "Submodule key must be in format <KEY>@<PROJECT>"
         exit 1
     fi
 
-    local module="${full%@*}"
-    local parent="${full#*@}"
+    local module="${key_at_parent%@*}"
+    local parent="${key_at_parent#*@}"
+    local parent_file="$PROJECTS_DIR/$parent.json"
 
-    if ! project_exists "$parent"; then
+    if [[ ! -f "$parent_file" ]]; then
         echo "Parent project '$parent' does not exist"
         exit 1
     fi
 
-    # check if module exists
-    if jq -e --arg key "$module" '.submodules[] | select(.key==$key)' "$(json_file "$parent")" >/dev/null; then
+    # Read parent JSON
+    local parent_json
+    parent_json=$(json_read "$parent_file")
+
+    # Add module
+    if echo "$parent_json" | grep -q "\"$module\""; then
         echo "Submodule '$module' already exists in '$parent'"
         exit 1
     fi
 
-    # add submodule
-    tmp=$(mktemp)
-    jq --arg key "$module" --arg desc "$desc" \
-       '.submodules += [{"key": $key, "description": $desc, "tags": []}]' \
-       "$(json_file "$parent")" > "$tmp"
-    mv "$tmp" "$(json_file "$parent")"
+    # Update JSON with module
+    local new_modules
+    new_modules=$(echo "$parent_json" | sed -E "s/\"modules\": \[\]/\"modules\": [\"$module\"]/")
 
+    json_write "$parent_file" "$new_modules"
     echo "✅ Submodule '$module@$parent' created."
 }
 
-cmd_project_list() {
+project_list() {
     echo "📂 Projects:"
     for f in "$PROJECTS_DIR"/*.json; do
-        [[ ! -f "$f" ]] && continue
-        parent=$(jq -r '.key' "$f")
-        echo "  - $parent"
-        jq -r '.submodules[]?.key' "$f" | while read mod; do
+        [[ -f "$f" ]] || continue
+        local base=$(basename "$f" .json)
+        local json
+        json=$(json_read "$f")
+        echo "  - $base"
+        # List submodules
+        local modules
+        modules=$(echo "$json" | grep -oP '"modules": \[\K[^\]]*' | tr -d '"')
+        for mod in $modules; do
             echo "      * $mod"
         done
     done
 }
 
-cmd_tags_add() {
-    local full="$1"
+tags_add() {
+    local key="$1"
     local tag="$2"
 
-    if [[ "$full" == *@* ]]; then
-        local module="${full%@*}"
-        local parent="${full#*@}"
-        [[ ! -f "$(json_file "$parent")" ]] && { echo "Parent project '$parent' not found"; exit 1; }
-
-        # add tag to submodule
-        tmp=$(mktemp)
-        jq --arg mod "$module" --arg tag "$tag" '
-            (.submodules[] | select(.key==$mod) | .tags) |= (if index($tag) then . else . + [$tag] end)
-        ' "$(json_file "$parent")" > "$tmp"
-        mv "$tmp" "$(json_file "$parent")"
-        echo "✅ Tag '$tag' added to submodule '$module@$parent'."
-
-    else
-        local project="$full"
-        [[ ! -f "$(json_file "$project")" ]] && { echo "Project '$project' not found"; exit 1; }
-
-        tmp=$(mktemp)
-        jq --arg tag "$tag" '
-            (.tags) |= (if index($tag) then . else . + [$tag] end)
-        ' "$(json_file "$project")" > "$tmp"
-        mv "$tmp" "$(json_file "$project")"
-        echo "✅ Tag '$tag' added to project '$project'."
+    local file="$PROJECTS_DIR/$key.json"
+    if [[ ! -f "$file" ]]; then
+        echo "Project or submodule '$key' does not exist"
+        exit 1
     fi
+
+    local json
+    json=$(json_read "$file")
+    # Check if tag exists
+    if echo "$json" | grep -q "\"$tag\""; then
+        echo "✅ Tag '$tag' already present for '$key'."
+        return
+    fi
+
+    local new_json
+    new_json=$(echo "$json" | sed -E "s/(\"tags\": \[)/\1\"$tag\", /")
+    json_write "$file" "$new_json"
+    echo "✅ Tag '$tag' added to '$key'."
 }
 
-cmd_tags_list() {
-    local full="$1"
-
-    if [[ "$full" == *@* ]]; then
-        local module="${full%@*}"
-        local parent="${full#*@}"
-        jq -r --arg mod "$module" '.submodules[] | select(.key==$mod) | .tags[]' "$(json_file "$parent")"
-
-    else
-        jq -r '.tags[]' "$(json_file "$full")"
+tags_list() {
+    local key="$1"
+    local file="$PROJECTS_DIR/$key.json"
+    if [[ ! -f "$file" ]]; then
+        echo "Project or submodule '$key' does not exist"
+        exit 1
     fi
+
+    local json
+    json=$(json_read "$file")
+    local tags
+    tags=$(echo "$json" | grep -oP '"tags": \[\K[^\]]*' | tr -d '"')
+    for t in $tags; do
+        echo "$t"
+    done
 }
 
-cmd_tags_by() {
+tags_by() {
     local tag="$1"
     echo "Projects/submodules with tag '$tag':"
     for f in "$PROJECTS_DIR"/*.json; do
-        [[ ! -f "$f" ]] && continue
-        proj=$(jq -r '.key' "$f")
-        # check project
-        if jq -e --arg t "$tag" '.tags | index($t)' "$f" >/dev/null; then
-            echo "  - $proj"
+        [[ -f "$f" ]] || continue
+        local base=$(basename "$f" .json)
+        local json
+        json=$(json_read "$f")
+        if echo "$json" | grep -q "\"$tag\""; then
+            echo "  - $base"
         fi
-        # check submodules
-        jq -r --arg t "$tag" --arg parent "$proj" '.submodules[] | select(.tags|index($t)) | "\(.key)@'"$proj"'"' "$f" | while read sm; do
-            echo "      * $sm"
+        # Check modules
+        local modules
+        modules=$(echo "$json" | grep -oP '"modules": \[\K[^\]]*' | tr -d '"')
+        for mod in $modules; do
+            local mod_file="$PROJECTS_DIR/$base.json"  # module tags are stored in parent JSON
+            if echo "$json" | grep -q "\"$tag\""; then
+                echo "      * $mod@$base"
+            fi
         done
     done
 }
 
-# -----------------------------
-# Main
-# -----------------------------
+# -----------------------
+# Main argument parsing
+# -----------------------
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <command> ..."
-    exit 1
-fi
+main() {
+    if [[ $# -lt 1 ]]; then
+        show_help
+        exit 0
+    fi
 
-case "$1" in
-    project)
-        shift
-        case "$1" in
-            create) shift; cmd_project_create "$@" ;;
-            list) shift; cmd_project_list ;;
-            tags)
-                shift
-                case "$1" in
-                    add) shift; cmd_tags_add "$@" ;;
-                    list) shift; cmd_tags_list "$@" ;;
-                    by) shift; cmd_tags_by "$@" ;;
-                    *) echo "Unknown tags command"; exit 1 ;;
-                esac ;;
-            *) echo "Unknown project command"; exit 1 ;;
-        esac ;;
-    submodule)
-        shift
-        case "$1" in
-            create) shift; cmd_submodule_create "$@" ;;
-            *) echo "Unknown submodule command"; exit 1 ;;
-        esac ;;
-    *)
-        echo "Unknown command"
-        exit 1
-        ;;
-esac
+    case "$1" in
+        project)
+            case "$2" in
+                create) project_create "$3" "$4" ;;
+                list) project_list ;;
+                tags)
+                    case "$3" in
+                        add) tags_add "$4" "$5" ;;
+                        list) tags_list "$4" ;;
+                        by) tags_by "$4" ;;
+                        *) show_help ;;
+                    esac
+                    ;;
+                *) show_help ;;
+            esac
+            ;;
+        submodule)
+            case "$2" in
+                create) submodule_create "$3" "$4" ;;
+                *) show_help ;;
+            esac
+            ;;
+        help) show_help ;;
+        version) echo "YATT version 0.1" ;;
+        *) echo "Unknown command. Use '$0 help'"; exit 1 ;;
+    esac
+}
+
+main "$@"
