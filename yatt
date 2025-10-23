@@ -22,34 +22,45 @@ help() {
 YATT - Yet Another Task Tracker
 
 Usage:
-  ./yatt <command> [subcommand] [options]
+  yatt <command> [subcommand] [options]
 
 Commands:
 
 Project management:
-  project create <name> <description>       Create a new project
-  project remove <name>                      Delete an existing project (asks for confirmation)
-  project list                              List projects and modules
+  project create <name> <description>              Create a new project
+  project remove <name>                             Delete an existing project (asks for confirmation)
+  project list                                     List projects and their submodules
 
 Tag management:
-  project tags add <project|module@project> <tag>     Add a tag (duplicates prevented)
-  project tags remove <project|module@project> <tag>  Remove a tag
-  project tags list <project|module@project>         List tags
-  project tags by <tag>                              List all projects/submodules with the tag
+  project tags add <project|module@project> <tag>    Add a tag (duplicates prevented)
+  project tags remove <project|module@project> <tag> Remove a tag
+  project tags list <project|module@project>        List tags of a project or submodule
+  project tags by <tag>                              List all projects/submodules with the specified tag
 
 Submodule management:
-  submodule create <name>@<project> <description>   Create a submodule under a project
-  submodule remove <name>@<project>                 Remove a submodule
+  submodule create <name>@<project> <description>  Create a submodule under a project
+  submodule remove <name>@<project>                Remove a submodule
+  submodule list <project>                         List submodules of a project
+
+Time tracking:
+  track start <project|module@project>            Start tracking time
+  track stop                                      Stop the active tracking session
+  track status                                    Show the currently active session with elapsed time
+  track list [project|module@project]             List all tracked sessions (optional filter by project/module)
+  track report [YYYY-MM-DD]                        Show daily report (default: today) with durations and total time
 
 Other:
-  help                                      Show this help
+  help                                            Show this help message
 
 Examples:
-  ./yatt project create myapp "Main backend project"
-  ./yatt submodule create auth@myapp "Authentication service"
-  ./yatt project tags add myapp backend
-  ./yatt project tags by backend
-  ./yatt project delete myapp
+  yatt project create myapp "Main backend project"
+  yatt submodule create auth@myapp "Authentication service"
+  yatt project tags add myapp backend
+  yatt project tags by backend
+  yatt project remove myapp
+  yatt track start make-coffee
+  yatt track stop
+  yatt track report 2025-10-23
 EOF
 }
 
