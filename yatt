@@ -14,6 +14,36 @@ mkdir -p "$PROJECTS_DIR"
 json_read() { jq '.' "$1"; }
 json_write() { echo "$2" > "$1"; }
 
+color_echo() {
+  local color_name="$1"
+  local text="$2"
+
+  # Map color names to ANSI color codes
+  case "$color_name" in
+    black)   color_code="30" ;;
+    red)     color_code="31" ;;
+    green)   color_code="32" ;;
+    yellow)  color_code="33" ;;
+    blue)    color_code="34" ;;
+    purple|magenta) color_code="35" ;;
+    cyan)    color_code="36" ;;
+    white)   color_code="37" ;;
+    *) echo "Unknown color: $color_name" >&2; return 1 ;;
+  esac
+
+  # Print text in color
+  echo -e "\033[${color_code}m${text}\033[0m"
+}
+
+format_seconds() {
+    local T=$1
+    local H M S
+    H=$((T/3600))
+    M=$(( (T%3600)/60 ))
+    S=$((T%60))
+    printf "%02d:%02d:%02d\n" $H $M $S
+}
+
 # -------------------------------
 # Help
 # -------------------------------
@@ -27,7 +57,7 @@ Usage:
 Commands:
 
 Project management:
-  project create <name> <description>                Create a new project
+  project create <name> [description]                Create a new project
   project remove <name>                              Delete an existing project (asks for confirmation)
   project list                                       List projects and their submodules
 
@@ -38,9 +68,9 @@ Tag management:
   project tags by <tag>                              List all projects/submodules with the specified tag
 
 Submodule management:
-  submodule create <name>@<project> <description>    Create a submodule under a project
+  submodule create <name>@<project> [description]    Create a submodule under a project
   submodule remove <name>@<project>                  Remove a submodule
-  submodule list <project>                           List submodules of a project
+  submodule list <project>                           List submodules of a project with details
 
 Time tracking:
   track start <project|module@project>               Start tracking time
@@ -55,6 +85,7 @@ Other:
 Examples:
   yatt project create myapp "Main backend project"
   yatt submodule create auth@myapp "Authentication service"
+  yatt submodule list myapp
   yatt project tags add myapp backend
   yatt project tags by backend
   yatt project remove myapp
@@ -69,49 +100,52 @@ EOF
 # -------------------------------
 project_create() {
     local name="$1"
-    local desc="$2"
+    shift
+    local desc="$*"
     local file="$PROJECTS_DIR/$name.json"
+
     if [[ -f "$file" ]]; then
-        echo "Project '$name' already exists."
+        #echo "Project '$name' already exists."
+        color_echo yellow "Project '$name' already exists."
         exit 1
     fi
 
     jq -n --arg n "$name" --arg d "$desc" '{name:$n, description:$d, tags:[], modules:[]}' > "$file"
-    echo "✅ Project '$name' created."
+    color_echo green "✅ Project '$name' created."
 }
 
 project_remove() {
     local name="$1"
 
-    [[ -z "$name" ]] && { echo "❌ Usage: project remove <name>"; exit 1; }
+    [[ -z "$name" ]] && { color_echo red "❌ Usage: project remove <name>"; exit 1; }
 
     local project_file="$PROJECTS_DIR/${name}.json"
 
     if [[ ! -f "$project_file" ]]; then
-        echo "❌ Project '$name' not found."
+        color_echo red "❌ Project '$name' not found."
         exit 1
     fi
 
     # Confirm before deletion
     read -p "⚠️  Are you sure you want to delete project '$name'? (y/N): " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "❌ Operation cancelled."; exit 0; }
+    [[ "$confirm" =~ ^[Yy]$ ]] || { color_echo green "❌ Operation cancelled."; exit 0; }
 
     rm -f "$project_file"
-    echo "🗑️  Project '$name' removed."
+    color_echo green "🗑️  Project '$name' removed."
 }
 
 project_list() {
-    echo "📂 Projects:"
+    color_echo blue "📂 Projects:"
     for f in "$PROJECTS_DIR"/*.json; do
         [[ -f "$f" ]] || continue
         local project
         project=$(basename "$f" .json)
-        echo "  - $project"
+        color_echo purple "  - $project"
         local modules
         modules=$(jq -r '.modules[].name?' "$f")
         while IFS= read -r m; do
             [[ -z "$m" ]] && continue
-            echo "      * $m"
+            color_echo cyan "      * $m"
         done <<< "$modules"
     done
 }
@@ -121,25 +155,26 @@ project_list() {
 # -------------------------------
 submodule_create() {
     local full="$1"
-    local desc="$2"
+    shift
+    local desc="$*"
     local module="${full%@*}"
     local parent="${full#*@}"
     local file="$PROJECTS_DIR/$parent.json"
 
     if [[ ! -f "$file" ]]; then
-        echo "Parent project '$parent' does not exist."
+        color_echo red "Parent project '$parent' does not exist."
         exit 1
     fi
 
     if jq -e --arg m "$module" '.modules[] | select(.name==$m)' "$file" >/dev/null; then
-        echo "Submodule '$module@$parent' already exists."
+        color_echo yellow "Submodule '$module@$parent' already exists."
         exit 1
     fi
 
     jq --arg m "$module" --arg d "$desc" '.modules += [{"name":$m, "description":$d, "tags":[]}]' "$file" \
        > "$file.tmp" && mv "$file.tmp" "$file"
 
-    echo "✅ Submodule '$module@$parent' created."
+    color_echo green "✅ Submodule '$module@$parent' created."
 }
 
 submodule_remove() {
@@ -151,30 +186,78 @@ submodule_remove() {
     [[ -f "$file" ]] || { echo "Parent project '$parent' does not exist."; exit 1; }
 
     jq --arg m "$module" '.modules |= map(select(.name != $m))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-    echo "✅ Submodule '$module@$parent' removed."
+    color_echo green "✅ Submodule '$module@$parent' removed."
 }
 
+submodule_list() {
+    local project="${1:-}"
+    
+    [[ -z "$project" ]] && { color_echo red "❌ Usage: submodule list <project>"; exit 1; }
+    
+    local file="$PROJECTS_DIR/$project.json"
+    
+    if [[ ! -f "$file" ]]; then
+        colro_echo red "❌ Project '$project' not found."
+        exit 1
+    fi
+    
+    local module_count
+    module_count=$(jq '.modules | length' "$file")
+    
+    if [[ "$module_count" -eq 0 ]]; then
+        color_echo red "📦 No submodules found in project '$project'."
+        return 0
+    fi
+    
+    color_echo green "📦 Submodules in project '$project':"
+    echo ""
+    
+    local modules
+    modules=$(jq -c '.modules[]' "$file")
+    
+    while IFS= read -r mod; do
+        [[ -z "$mod" ]] && continue
+        
+        local mod_name mod_desc mod_tags
+        mod_name=$(echo "$mod" | jq -r '.name')
+        mod_desc=$(echo "$mod" | jq -r '.description // "No description"')
+        mod_tags=$(echo "$mod" | jq -r '.tags[]?' | tr '\n' ', ' | sed 's/,$//')
+        
+        color_echo yellow "  🔹 $mod_name@$project"
+        color_echo blue "     Description: $mod_desc"
+        
+        if [[ -n "$mod_tags" ]]; then
+            color_echo purple "     Tags: $mod_tags"
+        else
+            color_echo purple "     Tags: (none)"
+        fi
+        echo ""
+    done <<< "$modules"
+}
 
 # -------------------------------
 # Tag commands
 # -------------------------------
 tags_add() {
-    local key="$1"
-    local tag="$2"
+    local key="${1:-}"
+    local tag="${2:-}"
+    
+    [[ -z "$key" ]] && { color_echo red "❌ Usage: project tags add <project|module@project> <tag>"; exit 1; }
+    [[ -z "$tag" ]] && { color_echo red "❌ Usage: project tags add <project|module@project> <tag>"; exit 1; }
 
     if [[ "$key" == *@* ]]; then
         # Submodule
         local module="${key%@*}"
         local parent="${key#*@}"
         local file="$PROJECTS_DIR/$parent.json"
-        [[ -f "$file" ]] || { echo "Parent project '$parent' does not exist"; exit 1; }
+        [[ -f "$file" ]] || { color_echo red "Parent project '$parent' does not exist"; exit 1; }
 
         local json
         json=$(json_read "$file")
 
         # Prevent duplicate tag
         if echo "$json" | jq -e --arg m "$module" --arg t "$tag" '.modules[] | select(.name==$m) | .tags | index($t)' >/dev/null; then
-            echo "✅ Tag '$tag' already present for submodule '$module@$parent'."
+            color_echo yellow "✅ Tag '$tag' already present for submodule '$module@$parent'."
             return
         fi
 
@@ -182,72 +265,77 @@ tags_add() {
             .modules |= map(if .name==$m then .tags += [$t] else . end)
         ')
         json_write "$file" "$json"
-        echo "✅ Tag '$tag' added to submodule '$module@$parent'."
+        color_echo green "✅ Tag '$tag' added to submodule '$module@$parent'."
 
     else
         # Project
         local file="$PROJECTS_DIR/$key.json"
-        [[ -f "$file" ]] || { echo "Project '$key' does not exist"; exit 1; }
+        [[ -f "$file" ]] || { color_echo red "Project '$key' does not exist"; exit 1; }
 
         local json
         json=$(json_read "$file")
         if echo "$json" | jq -e --arg t "$tag" '.tags | index($t)' >/dev/null; then
-            echo "✅ Tag '$tag' already present for project '$key'."
+            color_echo yellow "✅ Tag '$tag' already present for project '$key'."
             return
         fi
         json=$(echo "$json" | jq --arg t "$tag" '.tags += [$t]')
         json_write "$file" "$json"
-        echo "✅ Tag '$tag' added to project '$key'."
+        color_echo green "✅ Tag '$tag' added to project '$key'."
     fi
 }
 tags_remove() {
-    local key="$1"
-    local tag="$2"
+    local key="${1:-}"
+    local tag="${2:-}"
+    
+    [[ -z "$key" ]] && { color_echo red "❌ Usage: project tags remove <project|module@project> <tag>"; exit 1; }
+    [[ -z "$tag" ]] && { color_echo red "❌ Usage: project tags remove <project|module@project> <tag>"; exit 1; }
 
     if [[ "$key" == *@* ]]; then
         # Submodule
         local module="${key%@*}"
         local parent="${key#*@}"
         local file="$PROJECTS_DIR/$parent.json"
-        [[ -f "$file" ]] || { echo "Parent project '$parent' does not exist"; exit 1; }
+        [[ -f "$file" ]] || { color_echo red "Parent project '$parent' does not exist"; exit 1; }
 
         jq --arg m "$module" --arg t "$tag" '
             .modules |= map(
                 if .name==$m then .tags |= map(select(. != $t)) else . end
             )
         ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-        echo "✅ Tag '$tag' removed from submodule '$module@$parent'."
+        color_echo green "✅ Tag '$tag' removed from submodule '$module@$parent'."
 
     else
         # Project
         local file="$PROJECTS_DIR/$key.json"
-        [[ -f "$file" ]] || { echo "Project '$key' does not exist"; exit 1; }
+        [[ -f "$file" ]] || { color_echo red "Project '$key' does not exist"; exit 1; }
 
         jq --arg t "$tag" '.tags |= map(select(. != $t))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-        echo "✅ Tag '$tag' removed from project '$key'."
+        color_echo green "✅ Tag '$tag' removed from project '$key'."
     fi
 }
 
 tags_list() {
-    local key="$1"
+    local key="${1:-}"
+    
+    [[ -z "$key" ]] && { color_echo red "❌ Usage: project tags list <project|module@project>"; exit 1; }
 
     if [[ "$key" == *@* ]]; then
         local module="${key%@*}"
         local parent="${key#*@}"
         local file="$PROJECTS_DIR/$parent.json"
-        [[ -f "$file" ]] || { echo "Parent project '$parent' does not exist"; exit 1; }
+        [[ -f "$file" ]] || { color_echo red "Parent project '$parent' does not exist"; exit 1; }
         json_read "$file" | jq -r --arg m "$module" '.modules[] | select(.name==$m) | .tags[]?'
     else
         local file="$PROJECTS_DIR/$key.json"
-        [[ -f "$file" ]] || { echo "Project '$key' does not exist"; exit 1; }
+        [[ -f "$file" ]] || { color_echo red "Project '$key' does not exist"; exit 1; }
         json_read "$file" | jq -r '.tags[]?'
     fi
 }
 
 tags_by() {
     local tag="${1:-}"
-    [[ -z "$tag" ]] && { echo "❌ Usage: tags by <tag>"; return 1; }
-    echo "Projects/submodules with tag '$tag':"
+    [[ -z "$tag" ]] && { color_echo red "❌ Usage: tags by <tag>"; return 1; }
+    color_echo green "Projects/submodules with tag '$tag':"
 
     for f in "$PROJECTS_DIR"/*.json; do
         [[ -f "$f" ]] || continue
@@ -257,7 +345,7 @@ tags_by() {
 
         # If project has tag
         if echo "$json" | jq -e --arg t "$tag" '.tags | index($t)' >/dev/null; then
-            echo "  - $project"
+            color_echo yellow "  - $project"
         fi
 
         # Check modules
@@ -268,7 +356,7 @@ tags_by() {
             if echo "$mod" | jq -e --arg t "$tag" '.tags | index($t)' >/dev/null; then
                 local mod_name
                 mod_name=$(echo "$mod" | jq -r '.name')
-                echo "      * $mod_name@$project"
+                color_echo blue "      * $mod_name@$project"
             fi
         done <<< "$modules"
     done
@@ -278,18 +366,18 @@ tags_by() {
 # Tracing
 # -------------------------------
 ensure_tracking_file() {
-    [[ -f "$TRACK_FILE" ]] || echo '{"active": null, "logs": []}' > "$TRACK_FILE"
+    [[ -f "$TRACK_FILE" ]] || color_echo red '{"active": null, "logs": []}' > "$TRACK_FILE"
 }
 
 track_start() {
     local name="$1"
-    [[ -z "$name" ]] && { echo "❌ Usage: yatt track start <project|module@project>"; return 1; }
+    [[ -z "$name" ]] && { color_echo red "❌ Usage: yatt track start <project|module@project>"; return 1; }
 
     ensure_tracking_file
 
     # Check if active session exists
     if grep -q '"active": {' "$TRACK_FILE"; then
-        echo "❌ A session is already active. Stop it first with 'yatt track stop'."
+        color_echo red "❌ A session is already active. Stop it first with 'yatt track stop'."
         return 1
     fi
 
@@ -298,16 +386,16 @@ track_start() {
     if [[ "$name" == *@* ]]; then
         local parent="${name#*@}"
         project_file="$PROJECTS_DIR/${parent}.json"
-        [[ ! -f "$project_file" ]] && { echo "❌ Project '$parent' not found."; return 1; }
+        [[ ! -f "$project_file" ]] && { color_echo red "❌ Project '$parent' not found."; return 1; }
     else
         project_file="$PROJECTS_DIR/${name}.json"
-        [[ ! -f "$project_file" ]] && { echo "❌ Project '$name' not found."; return 1; }
+        [[ ! -f "$project_file" ]] && { color_echo red "❌ Project '$name' not found."; return 1; }
     fi
 
     local start_time
     start_time=$(date -Iseconds)
 
-    # Write active session (don’t overwrite logs)
+    # Write active session (don't overwrite logs)
     awk -v n="$name" -v t="$start_time" '
         BEGIN { active_written=0 }
         {
@@ -323,7 +411,7 @@ track_start() {
         }
     ' "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
 
-    echo "▶️ Tracking started for '$name' at $start_time"
+    color_echo green "▶️ Tracking started for '$name' at $start_time"
 }
 
 track_stop() {
@@ -335,7 +423,7 @@ track_stop() {
 
     # If no active session
     if [[ -z "$active_line" || "$active_line" == *"null"* ]]; then
-        echo "❌ No active session to stop."
+        color_echo red "❌ No active session to stop."
         return 1
     fi
 
@@ -364,7 +452,7 @@ track_stop() {
     # Update tracking.json: append log and clear active
     jq --argjson newlog "$new_log" '.logs += [$newlog] | .active = null' "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
 
-    echo "✅ Stopped tracking '$name'. Duration: $elapsed seconds."
+    color_echo green "✅ Stopped tracking '$name'. Duration: $elapsed seconds."
 }
 
 track_status() {
@@ -376,7 +464,7 @@ track_status() {
 
     # If no active session
     if [[ -z "$active_line" || "$active_line" == *"null"* ]]; then
-        echo "🟢 No active tracking session."
+        color_echo blue "🟢 No active tracking session."
         return 0
     fi
 
@@ -388,7 +476,7 @@ track_status() {
     # Convert start_time to epoch
     local start_epoch now_epoch elapsed
     start_epoch=$(date -d "$start_time" +%s 2>/dev/null) || {
-        echo "❌ Invalid start timestamp: $start_time"
+        color_echo red "❌ Invalid start timestamp: $start_time"
         return 1
     }
     now_epoch=$(date +%s)
@@ -398,9 +486,9 @@ track_status() {
     local m=$(( (elapsed % 3600) / 60 ))
     local s=$((elapsed % 60))
 
-    echo "⏳ Tracking: $name"
-    echo "   Started:  $start_time"
-    echo "   Elapsed:  ${h}h ${m}m ${s}s"
+    color_echo blue "⏳ Tracking: $name"
+    color_echo green "   Started:  $start_time"
+    color_echo yellow "   Elapsed:  ${h}h ${m}m ${s}s"
 }
 
 track_list() {
@@ -421,9 +509,9 @@ track_list() {
             duration="active"
         fi
 
-        echo "Project/Submodule: $name"
-        echo "  Start: $start"
-        echo "  End: ${end:-active}"
+        color_echo blue "Project/Submodule: $name"
+        color_echo green "  Start: $start"
+        color_echo yellow "  End: ${end:-active}"
         if [[ "$duration" != "active" ]]; then
             printf "  Duration: %02d:%02d:%02d\n" $((duration/3600)) $(((duration%3600)/60)) $((duration%60))
         else
@@ -431,16 +519,6 @@ track_list() {
         fi
         echo
     done
-}
-
-
-format_seconds() {
-    local T=$1
-    local H M S
-    H=$((T/3600))
-    M=$(( (T%3600)/60 ))
-    S=$((T%60))
-    printf "%02d:%02d:%02d\n" $H $M $S
 }
 
 track_report() {
@@ -477,7 +555,6 @@ track_report() {
     printf "Total time: %02d:%02d:%02d\n" $((total_sec/3600)) $(((total_sec%3600)/60)) $((total_sec%60))
 }
 
-
 # -------------------------------
 # Main
 # -------------------------------
@@ -494,7 +571,10 @@ main() {
             local sub="$1"; shift || true
             case "$sub" in
                 create)
-                    project_create "$@"
+                    local target="$1"
+                    shift
+                    #project_create "$@"
+                    project_create "$target" "$@"
                     ;;
                 remove)
                     project_remove "$@"
@@ -521,13 +601,13 @@ main() {
                             tags_search_all "$@"
                             ;;
                         *)
-                            echo "❌ Unknown tag command: $tagcmd"
+                            color_echo red "❌ Unknown tag command: $tagcmd"
                             help
                             ;;
                     esac
                     ;;
                 *)
-                    echo "❌ Unknown project subcommand: $sub"
+                    color_echo red "❌ Unknown project subcommand: $sub"
                     help
                     ;;
             esac
@@ -549,7 +629,9 @@ main() {
             local sub="$1"; shift || true
             case "$sub" in
                 create)
-                    submodule_create "$@"
+                    local target="$1"
+                    shift
+                    submodule_create "$target" "$@"
                     ;;
                 remove)
                     submodule_remove "$@"
@@ -558,14 +640,14 @@ main() {
                     submodule_list "$@"
                     ;;
                 *)
-                    echo "❌ Unknown submodule subcommand: $sub"
+                    color_echo red "❌ Unknown submodule subcommand: $sub"
                     help
                     ;;
             esac
             ;;
         
         *)
-            echo "❌ Unknown command: $cmd"
+            color_echo red "❌ Unknown command: $cmd"
             help
             ;;
     esac
