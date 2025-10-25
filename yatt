@@ -46,6 +46,158 @@ format_seconds() {
 }
 
 # -------------------------------
+# Bash Completion Generator
+# -------------------------------
+generate_completion() {
+    cat <<'COMPLETION_EOF'
+# Bash completion for yatt
+_yatt_completion() {
+    local cur prev words cword
+    _init_completion || return
+
+    local YATT_DIR="$HOME/.yatt"
+    local PROJECTS_DIR="$YATT_DIR/projects"
+
+    # Get list of projects
+    _yatt_projects() {
+        if [[ -d "$PROJECTS_DIR" ]]; then
+            for f in "$PROJECTS_DIR"/*.json; do
+                [[ -f "$f" ]] && basename "$f" .json
+            done
+        fi
+    }
+
+    # Get list of submodules for a project
+    _yatt_submodules() {
+        local project="$1"
+        if [[ -f "$PROJECTS_DIR/$project.json" ]]; then
+            jq -r '.modules[].name' "$PROJECTS_DIR/$project.json" 2>/dev/null | while read -r mod; do
+                echo "$mod@$project"
+            done
+        fi
+    }
+
+    # Get all projects and submodules
+    _yatt_all_entities() {
+        _yatt_projects
+        for proj in $(_yatt_projects); do
+            _yatt_submodules "$proj"
+        done
+    }
+
+    # Get all tags
+    _yatt_all_tags() {
+        if [[ -d "$PROJECTS_DIR" ]]; then
+            for f in "$PROJECTS_DIR"/*.json; do
+                [[ -f "$f" ]] && jq -r '.tags[]?, .modules[].tags[]?' "$f" 2>/dev/null
+            done | sort -u
+        fi
+    }
+
+    case $cword in
+        1)
+            COMPREPLY=($(compgen -W "project submodule track help completion" -- "$cur"))
+            ;;
+        2)
+            case ${words[1]} in
+                project)
+                    COMPREPLY=($(compgen -W "create remove list tags" -- "$cur"))
+                    ;;
+                submodule)
+                    COMPREPLY=($(compgen -W "create remove list" -- "$cur"))
+                    ;;
+                track)
+                    COMPREPLY=($(compgen -W "start stop status list report" -- "$cur"))
+                    ;;
+            esac
+            ;;
+        3)
+            case ${words[1]} in
+                project)
+                    case ${words[2]} in
+                        remove)
+                            COMPREPLY=($(compgen -W "$(_yatt_projects)" -- "$cur"))
+                            ;;
+                        tags)
+                            COMPREPLY=($(compgen -W "add remove list by" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                submodule)
+                    case ${words[2]} in
+                        remove)
+                            COMPREPLY=($(compgen -W "$(_yatt_all_entities | grep @)" -- "$cur"))
+                            ;;
+                        list)
+                            COMPREPLY=($(compgen -W "$(_yatt_projects)" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                track)
+                    case ${words[2]} in
+                        start)
+                            COMPREPLY=($(compgen -W "$(_yatt_all_entities)" -- "$cur"))
+                            ;;
+                        list|report)
+                            local entities=$(_yatt_all_entities)
+                            local tags=$(_yatt_all_tags | sed 's/^/tag:/')
+                            COMPREPLY=($(compgen -W "$entities $tags" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+        4)
+            case ${words[1]} in
+                project)
+                    case ${words[2]} in
+                        tags)
+                            case ${words[3]} in
+                                add|remove|list)
+                                    COMPREPLY=($(compgen -W "$(_yatt_all_entities)" -- "$cur"))
+                                    ;;
+                                by)
+                                    COMPREPLY=($(compgen -W "$(_yatt_all_tags)" -- "$cur"))
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                track)
+                    case ${words[2]} in
+                        report)
+                            # If previous word is an entity/tag, suggest dates
+                            if [[ ${words[3]} != "" ]]; then
+                                COMPREPLY=($(compgen -W "$(date +%F) $(date -d yesterday +%F)" -- "$cur"))
+                            fi
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+        5)
+            case ${words[1]} in
+                project)
+                    case ${words[2]} in
+                        tags)
+                            case ${words[3]} in
+                                add|remove)
+                                    COMPREPLY=($(compgen -W "$(_yatt_all_tags)" -- "$cur"))
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+complete -F _yatt_completion yatt
+COMPLETION_EOF
+}
+
+# -------------------------------
 # Help
 # -------------------------------
 help() {
@@ -669,6 +821,10 @@ main() {
     case "$cmd" in
         help|-h|--help)
             help
+            ;;
+
+        completion)
+            generate_completion
             ;;
 
         project)
