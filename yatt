@@ -94,6 +94,22 @@ _yatt_completion() {
         fi
     }
 
+    # Get tags for a specific entity
+    _yatt_entity_tags() {
+        local entity="$1"
+        if [[ "$entity" == *@* ]]; then
+            # Submodule
+            local module="${entity%@*}"
+            local parent="${entity#*@}"
+            local file="$PROJECTS_DIR/$parent.json"
+            [[ -f "$file" ]] && jq -r --arg m "$module" '.modules[] | select(.name==$m) | .tags[]?' "$file" 2>/dev/null
+        else
+            # Project
+            local file="$PROJECTS_DIR/$entity.json"
+            [[ -f "$file" ]] && jq -r '.tags[]?' "$file" 2>/dev/null
+        fi
+    }
+
     case $cword in
         1)
             COMPREPLY=($(compgen -W "project submodule track help completion" -- "$cur"))
@@ -181,8 +197,13 @@ _yatt_completion() {
                     case ${words[2]} in
                         tags)
                             case ${words[3]} in
-                                add|remove)
+                                add)
+                                    # For add, show all tags as suggestions
                                     COMPREPLY=($(compgen -W "$(_yatt_all_tags)" -- "$cur"))
+                                    ;;
+                                remove)
+                                    # For remove, only show tags from the selected entity
+                                    COMPREPLY=($(compgen -W "$(_yatt_entity_tags "${words[4]}")" -- "$cur"))
                                     ;;
                             esac
                             ;;
