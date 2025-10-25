@@ -259,6 +259,11 @@ Time tracking:
                                                      - date: specific day's report
                                                      - Any combination of filter + date
 
+Backup management:
+  backup create                                      Create a backup of all YATT data
+  backup list                                        List all available backups
+  backup restore <file>                              Restore data from a backup file
+
 Shell completion:
   completion                                         Generate shell completion script
 
@@ -271,12 +276,14 @@ Examples:
   yatt project tags add myapp backend
   yatt track start myapp
   yatt track stop
-  yatt track report                          # Today's report
-  yatt track report 2025-10-23               # Specific date
-  yatt track report myapp                    # All myapp entries
-  yatt track report myapp 2025-10-23         # myapp entries on specific date
-  yatt track report tag:backend              # All entries with 'backend' tag
-  yatt track report tag:backend 2025-10-23   # backend tag on specific date
+  yatt track report                                  # Today's report
+  yatt track report 2025-10-23                       # Specific date
+  yatt track report myapp                            # All myapp entries
+  yatt track report myapp 2025-10-23                 # myapp entries on specific date
+  yatt track report tag:backend                      # All entries with 'backend' tag
+  yatt track report tag:backend 2025-10-23           # backend tag on specific date
+  yatt backup create                                 # create a backup file under ~/.yatt/backups
+  yatt completion bash > /etc/bash_completion.d/yatt  
 EOF
 }
 
@@ -836,6 +843,50 @@ track_report() {
 }
 
 # -------------------------------
+# Backup commands
+# -------------------------------
+BACKUP_DIR="$YATT_DIR/backups"
+mkdir -p "$BACKUP_DIR"
+
+backup_create() {
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$BACKUP_DIR/yatt_backup_$timestamp.tar.gz"
+
+    tar -czf "$backup_file" -C "$HOME" ".yatt"
+    color_echo green "✅ Backup created: $backup_file"
+}
+
+backup_list() {
+    color_echo blue "📦 Available backups:"
+    if compgen -G "$BACKUP_DIR/*.tar.gz" > /dev/null; then
+        for file in "$BACKUP_DIR"/*.tar.gz; do
+            color_echo yellow "  - $(basename "$file")"
+        done
+    else
+        color_echo yellow "No backups found."
+    fi
+}
+
+backup_restore() {
+    local file="$1"
+    [[ -z "$file" ]] && { color_echo red "❌ Usage: backup restore <backup_file>"; return 1; }
+    local backup_file="$BACKUP_DIR/$file"
+
+    if [[ ! -f "$backup_file" ]]; then
+        color_echo red "❌ Backup file '$file' not found in $BACKUP_DIR"
+        return 1
+    fi
+
+    read -p "⚠️  This will overwrite your current YATT data. Continue? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { color_echo green "❌ Restore cancelled."; return 0; }
+
+    tar -xzf "$backup_file" -C "$HOME"
+    color_echo green "✅ Backup restored from '$file'"
+}
+
+
+# -------------------------------
 # Main
 # -------------------------------
 main() {
@@ -904,7 +955,15 @@ main() {
                 *) help ;;
             esac
             ;;
-
+        backup)
+            local sub="$1"; shift || true
+            case "$sub" in
+                create) backup_create ;;
+                list) backup_list ;;
+                restore) backup_restore "$@" ;;
+                *) show_help ;;
+            esac
+            ;;
         submodule)
             local sub="$1"; shift || true
             case "$sub" in
