@@ -259,6 +259,9 @@ Time tracking:
                                                      - date: specific day's report
                                                      - Any combination of filter + date
 
+Shell completion:
+  completion                                         Generate shell completion script
+
 Other:
   help                                               Show this help message
 
