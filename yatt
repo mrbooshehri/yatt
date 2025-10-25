@@ -6,6 +6,7 @@ YATT_DIR="$HOME/.yatt"
 PROJECTS_DIR="$YATT_DIR/projects"
 TRACK_FILE="$HOME/.yatt/tracking.json"
 
+mkdir -p "$YATT_DIR"
 mkdir -p "$PROJECTS_DIR"
 
 # -------------------------------
@@ -41,7 +42,7 @@ format_seconds() {
     H=$((T/3600))
     M=$(( (T%3600)/60 ))
     S=$((T%60))
-    printf "%02d:%02d:%02d\n" $H $M $S
+    printf "%02d:%02d:%02d" $H $M $S
 }
 
 # -------------------------------
@@ -76,8 +77,14 @@ Time tracking:
   track start <project|module@project>               Start tracking time
   track stop                                         Stop the active tracking session
   track status                                       Show the currently active session with elapsed time
-  track list [project|module@project]                List all tracked sessions (optional filter by project/module)
-  track report [YYYY-MM-DD]                          Show daily report (default: today) with durations and total time
+  track list [project|module@project]                List all tracked sessions (optional filter)
+  track report [project|module@project|tag:tagname] [YYYY-MM-DD]
+                                                     Show report with optional filters:
+                                                     - No args: today's report
+                                                     - project/module: filter by project/module
+                                                     - tag:tagname: filter by tag
+                                                     - date: specific day's report
+                                                     - Any combination of filter + date
 
 Other:
   help                                               Show this help message
@@ -85,13 +92,15 @@ Other:
 Examples:
   yatt project create myapp "Main backend project"
   yatt submodule create auth@myapp "Authentication service"
-  yatt submodule list myapp
   yatt project tags add myapp backend
-  yatt project tags by backend
-  yatt project remove myapp
-  yatt track start make-coffee
+  yatt track start myapp
   yatt track stop
-  yatt track report 2025-10-23
+  yatt track report                          # Today's report
+  yatt track report 2025-10-23               # Specific date
+  yatt track report myapp                    # All myapp entries
+  yatt track report myapp 2025-10-23         # myapp entries on specific date
+  yatt track report tag:backend              # All entries with 'backend' tag
+  yatt track report tag:backend 2025-10-23   # backend tag on specific date
 EOF
 }
 
@@ -105,7 +114,6 @@ project_create() {
     local file="$PROJECTS_DIR/$name.json"
 
     if [[ -f "$file" ]]; then
-        #echo "Project '$name' already exists."
         color_echo yellow "Project '$name' already exists."
         exit 1
     fi
@@ -183,7 +191,7 @@ submodule_remove() {
     local parent="${full#*@}"
     local file="$PROJECTS_DIR/$parent.json"
 
-    [[ -f "$file" ]] || { echo "Parent project '$parent' does not exist."; exit 1; }
+    [[ -f "$file" ]] || { color_echo red "Parent project '$parent' does not exist."; exit 1; }
 
     jq --arg m "$module" '.modules |= map(select(.name != $m))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
     color_echo green "✅ Submodule '$module@$parent' removed."
@@ -197,7 +205,7 @@ submodule_list() {
     local file="$PROJECTS_DIR/$project.json"
     
     if [[ ! -f "$file" ]]; then
-        colro_echo red "❌ Project '$project' not found."
+        color_echo red "❌ Project '$project' not found."
         exit 1
     fi
     
@@ -283,6 +291,7 @@ tags_add() {
         color_echo green "✅ Tag '$tag' added to project '$key'."
     fi
 }
+
 tags_remove() {
     local key="${1:-}"
     local tag="${2:-}"
@@ -362,26 +371,50 @@ tags_by() {
     done
 }
 
+# Helper function to get tags for a project or module
+get_tags_for_entity() {
+    local entity="$1"
+    
+    if [[ "$entity" == *@* ]]; then
+        # Submodule
+        local module="${entity%@*}"
+        local parent="${entity#*@}"
+        local file="$PROJECTS_DIR/$parent.json"
+        [[ -f "$file" ]] || return
+        jq -r --arg m "$module" '.modules[] | select(.name==$m) | .tags[]?' "$file" 2>/dev/null
+    else
+        # Project
+        local file="$PROJECTS_DIR/$entity.json"
+        [[ -f "$file" ]] || return
+        jq -r '.tags[]?' "$file" 2>/dev/null
+    fi
+}
+
 # -------------------------------
-# Tracing
+# Tracking
 # -------------------------------
 ensure_tracking_file() {
-    [[ -f "$TRACK_FILE" ]] || color_echo red '{"active": null, "logs": []}' > "$TRACK_FILE"
+    if [[ ! -f "$TRACK_FILE" ]]; then
+        echo '{"active_session": null, "sessions": []}' > "$TRACK_FILE"
+    fi
 }
 
 track_start() {
-    local name="$1"
+    local name="${1:-}"
     [[ -z "$name" ]] && { color_echo red "❌ Usage: yatt track start <project|module@project>"; return 1; }
 
     ensure_tracking_file
 
     # Check if active session exists
-    if grep -q '"active": {' "$TRACK_FILE"; then
+    local active
+    active=$(jq -r '.active_session' "$TRACK_FILE" 2>/dev/null)
+    
+    if [[ "$active" != "null" ]]; then
         color_echo red "❌ A session is already active. Stop it first with 'yatt track stop'."
         return 1
     fi
 
-    # Check if project exists
+    # Check if project/module exists
     local project_file
     if [[ "$name" == *@* ]]; then
         local parent="${name#*@}"
@@ -395,42 +428,37 @@ track_start() {
     local start_time
     start_time=$(date -Iseconds)
 
-    # Write active session (don't overwrite logs)
-    awk -v n="$name" -v t="$start_time" '
-        BEGIN { active_written=0 }
-        {
-            if ($0 ~ /"active": null/) {
-                print "  \"active\": {\"name\": \"" n "\", \"start\": \"" t "\"},"
-                active_written=1
-            } else {
-                print
-            }
-        }
-        END {
-            if (!active_written) print "  \"active\": {\"name\": \"" n "\", \"start\": \"" t "\"},"
-        }
-    ' "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
+    # Get tags for the entity
+    local tags_array
+    tags_array=$(get_tags_for_entity "$name" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+    [[ -z "$tags_array" || "$tags_array" == "[]" ]] && tags_array="[]"
 
-    color_echo green "▶️ Tracking started for '$name' at $start_time"
+    # Update tracking file with active session using jq
+    jq --arg name "$name" --arg start "$start_time" --argjson tags "$tags_array" \
+        '.active_session = {name: $name, start: $start, tags: $tags}' \
+        "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
+
+    color_echo green "▶️  Tracking started for '$name' at $start_time"
 }
 
 track_stop() {
     ensure_tracking_file
 
     # Read the active session
-    local active_line
-    active_line=$(grep -oP '"active": *\{[^}]*\}' "$TRACK_FILE")
+    local active
+    active=$(jq -r '.active_session' "$TRACK_FILE" 2>/dev/null)
 
     # If no active session
-    if [[ -z "$active_line" || "$active_line" == *"null"* ]]; then
+    if [[ "$active" == "null" ]]; then
         color_echo red "❌ No active session to stop."
         return 1
     fi
 
-    # Extract name and start timestamp
-    local name start_time end_time
-    name=$(echo "$active_line" | grep -oP '"name": *"\K[^"]+')
-    start_time=$(echo "$active_line" | grep -oP '"start": *"\K[^"]+')
+    # Extract session details
+    local name start_time tags_json end_time
+    name=$(jq -r '.active_session.name' "$TRACK_FILE")
+    start_time=$(jq -r '.active_session.start' "$TRACK_FILE")
+    tags_json=$(jq -c '.active_session.tags' "$TRACK_FILE")
     end_time=$(date -Iseconds)
 
     # Calculate elapsed seconds
@@ -439,39 +467,40 @@ track_stop() {
     now_epoch=$(date +%s)
     elapsed=$(( now_epoch - start_epoch ))
 
-    # Append to logs
-    # Read existing logs
-    local logs
-    logs=$(jq '.logs' "$TRACK_FILE")
+    # Extract date for the session
+    local session_date
+    session_date=$(date -d "$start_time" +%F)
 
-    # Create new log entry
-    local new_log
-    new_log=$(jq -n --arg name "$name" --arg start "$start_time" --arg end "$end_time" --arg elapsed "$elapsed" \
-        '{name: $name, start: $start, end: $end, elapsed_seconds: ($elapsed|tonumber)}')
+    # Create new session entry and update tracking file
+    jq --arg name "$name" \
+       --arg start "$start_time" \
+       --arg end "$end_time" \
+       --arg date "$session_date" \
+       --argjson elapsed "$elapsed" \
+       --argjson tags "$tags_json" \
+        '.sessions += [{name: $name, start: $start, end: $end, date: $date, duration_seconds: $elapsed, tags: $tags}] | .active_session = null' \
+        "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
 
-    # Update tracking.json: append log and clear active
-    jq --argjson newlog "$new_log" '.logs += [$newlog] | .active = null' "$TRACK_FILE" > "$TRACK_FILE.tmp" && mv "$TRACK_FILE.tmp" "$TRACK_FILE"
-
-    color_echo green "✅ Stopped tracking '$name'. Duration: $elapsed seconds."
+    color_echo green "✅ Stopped tracking '$name'. Duration: $(format_seconds $elapsed)"
 }
 
 track_status() {
     ensure_tracking_file
 
-    # Extract the 'active' object
-    local active_line
-    active_line=$(grep -oP '"active": *\{[^}]*\}' "$TRACK_FILE")
+    # Extract the 'active_session' object
+    local active
+    active=$(jq -r '.active_session' "$TRACK_FILE" 2>/dev/null)
 
     # If no active session
-    if [[ -z "$active_line" || "$active_line" == *"null"* ]]; then
+    if [[ "$active" == "null" ]]; then
         color_echo blue "🟢 No active tracking session."
         return 0
     fi
 
     # Extract name and start timestamp
     local name start_time
-    name=$(echo "$active_line" | grep -oP '"name": *"\K[^"]+')
-    start_time=$(echo "$active_line" | grep -oP '"start": *"\K[^"]+')
+    name=$(jq -r '.active_session.name' "$TRACK_FILE")
+    start_time=$(jq -r '.active_session.start' "$TRACK_FILE")
 
     # Convert start_time to epoch
     local start_epoch now_epoch elapsed
@@ -492,67 +521,142 @@ track_status() {
 }
 
 track_list() {
-    local project="${1:-}"
-    local logs
-    logs=$(jq -c '.logs[]' "$TRACK_FILE")
+    ensure_tracking_file
+    
+    local filter="${1:-}"
+    local sessions
+    sessions=$(jq -c '.sessions[]' "$TRACK_FILE" 2>/dev/null)
+    
+    if [[ -z "$sessions" ]]; then
+        color_echo yellow "No tracking sessions found."
+        return 0
+    fi
 
-    for entry in $logs; do
-        local name start end duration
-        name=$(echo "$entry" | jq -r '.name')
-        [[ -n "$project" && "$name" != "$project" ]] && continue
-        start=$(echo "$entry" | jq -r '.start')
-        end=$(echo "$entry" | jq -r '.end // empty')
+    color_echo blue "📋 Tracking Sessions:"
+    echo ""
 
-        if [[ -n "$end" ]]; then
-            duration=$(( $(date -d "$end" +%s) - $(date -d "$start" +%s) ))
-        else
-            duration="active"
+    while IFS= read -r session; do
+        [[ -z "$session" ]] && continue
+        
+        local name start end duration date
+        name=$(echo "$session" | jq -r '.name')
+        
+        # Apply filter if provided
+        if [[ -n "$filter" && "$name" != "$filter" ]]; then
+            continue
         fi
+        
+        start=$(echo "$session" | jq -r '.start')
+        end=$(echo "$session" | jq -r '.end')
+        duration=$(echo "$session" | jq -r '.duration_seconds')
+        date=$(echo "$session" | jq -r '.date')
 
-        color_echo blue "Project/Submodule: $name"
-        color_echo green "  Start: $start"
-        color_echo yellow "  End: ${end:-active}"
-        if [[ "$duration" != "active" ]]; then
-            printf "  Duration: %02d:%02d:%02d\n" $((duration/3600)) $(((duration%3600)/60)) $((duration%60))
-        else
-            echo "  Duration: active"
-        fi
-        echo
-    done
+        color_echo cyan "  📌 $name ($date)"
+        color_echo green "     Start: $start"
+        color_echo yellow "     End: $end"
+        color_echo purple "     Duration: $(format_seconds $duration)"
+        echo ""
+    done <<< "$sessions"
 }
 
 track_report() {
-    local date_filter="${1:-$(date +%F)}"
-    local logs
-    logs=$(jq -c '.logs[]' "$TRACK_FILE")
-    declare -A totals
-
-    echo "📅 Report for $date_filter"
-
-    for entry in $logs; do
-        local name start end duration day
-        name=$(echo "$entry" | jq -r '.name')
-        start=$(echo "$entry" | jq -r '.start')
-        end=$(echo "$entry" | jq -r '.end // empty')
-        day=$(date -d "$start" +%F)
-
-        [[ "$day" != "$date_filter" ]] && continue
-        if [[ -n "$end" ]]; then
-            duration=$(( $(date -d "$end" +%s) - $(date -d "$start" +%s) ))
-        else
-            duration=0
+    ensure_tracking_file
+    
+    local arg1="${1:-}"
+    local arg2="${2:-}"
+    local filter_entity=""
+    local filter_tag=""
+    local date_filter=""
+    
+    # Parse arguments
+    # Check if arg1 is a date (YYYY-MM-DD format)
+    if [[ "$arg1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        date_filter="$arg1"
+    elif [[ "$arg1" == tag:* ]]; then
+        filter_tag="${arg1#tag:}"
+        if [[ "$arg2" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            date_filter="$arg2"
         fi
-        totals["$name"]=$(( ${totals["$name"]:-0} + duration ))
-    done
+    elif [[ -n "$arg1" ]]; then
+        filter_entity="$arg1"
+        if [[ "$arg2" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            date_filter="$arg2"
+        fi
+    fi
+    
+    # Default to today if no date specified
+    [[ -z "$date_filter" ]] && date_filter=$(date +%F)
+    
+    local sessions
+    sessions=$(jq -c '.sessions[]' "$TRACK_FILE" 2>/dev/null)
+    
+    if [[ -z "$sessions" ]]; then
+        color_echo yellow "No tracking sessions found."
+        return 0
+    fi
 
+    # Build report header
+    local header="📅 Report for $date_filter"
+    if [[ -n "$filter_entity" ]]; then
+        header="$header (filtered by: $filter_entity)"
+    elif [[ -n "$filter_tag" ]]; then
+        header="$header (filtered by tag: $filter_tag)"
+    fi
+    color_echo blue "$header"
+    echo ""
+
+    declare -A totals
+    local found_any=false
+
+    while IFS= read -r session; do
+        [[ -z "$session" ]] && continue
+        
+        local name start date duration tags_json
+        name=$(echo "$session" | jq -r '.name')
+        date=$(echo "$session" | jq -r '.date')
+        duration=$(echo "$session" | jq -r '.duration_seconds')
+        tags_json=$(echo "$session" | jq -c '.tags')
+        
+        # Filter by date
+        [[ "$date" != "$date_filter" ]] && continue
+        
+        # Filter by entity if specified
+        if [[ -n "$filter_entity" && "$name" != "$filter_entity" ]]; then
+            continue
+        fi
+        
+        # Filter by tag if specified
+        if [[ -n "$filter_tag" ]]; then
+            local has_tag=false
+            while IFS= read -r tag; do
+                if [[ "$tag" == "$filter_tag" ]]; then
+                    has_tag=true
+                    break
+                fi
+            done < <(echo "$tags_json" | jq -r '.[]?')
+            [[ "$has_tag" == false ]] && continue
+        fi
+        
+        found_any=true
+        totals["$name"]=$(( ${totals["$name"]:-0} + duration ))
+    done <<< "$sessions"
+
+    if [[ "$found_any" == false ]]; then
+        color_echo yellow "No entries found for the specified criteria."
+        return 0
+    fi
+
+    # Display totals
     local total_sec=0
     for name in "${!totals[@]}"; do
         local d=${totals[$name]}
         total_sec=$((total_sec + d))
-        printf "  - %s: %02d:%02d:%02d\n" "$name" $((d/3600)) $(((d%3600)/60)) $((d%60))
+        color_echo green "  • $name: $(format_seconds $d)"
     done
-
-    printf "Total time: %02d:%02d:%02d\n" $((total_sec/3600)) $(((total_sec%3600)/60)) $((total_sec%60))
+    
+    echo ""
+    color_echo cyan "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    color_echo cyan "Total time: $(format_seconds $total_sec)"
 }
 
 # -------------------------------
@@ -573,7 +677,6 @@ main() {
                 create)
                     local target="$1"
                     shift
-                    #project_create "$@"
                     project_create "$target" "$@"
                     ;;
                 remove)
@@ -596,9 +699,6 @@ main() {
                             ;;
                         by)
                             tags_by "$@"
-                            ;;
-                        search)
-                            tags_search_all "$@"
                             ;;
                         *)
                             color_echo red "❌ Unknown tag command: $tagcmd"
