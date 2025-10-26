@@ -127,7 +127,7 @@ _yatt_completion() {
         2)
             case ${words[1]} in
                 project)
-                    COMPREPLY=($(compgen -W "create remove list tags" -- "$cur"))
+                    COMPREPLY=($(compgen -W "create remove list edit tags" -- "$cur"))
                     ;;
                 submodule)
                     COMPREPLY=($(compgen -W "create remove list tags" -- "$cur"))
@@ -145,6 +145,9 @@ _yatt_completion() {
                 project)
                     case ${words[2]} in
                         remove)
+                            COMPREPLY=($(compgen -W "$(_yatt_projects)" -- "$cur"))
+                            ;;
+                        edit)
                             COMPREPLY=($(compgen -W "$(_yatt_projects)" -- "$cur"))
                             ;;
                         tags)
@@ -381,6 +384,47 @@ project_remove() {
     rm -f "$project_file"
     color_echo green "🗑️  Project '$name' removed."
 }
+
+project_edit() {
+    local project_name="$1"
+    [[ -z "$project_name" ]] && { color_echo red "❌ Project name is required"; return 1; }
+
+    local project_file="$PROJECTS_DIR/$project_name.json"
+    [[ ! -f "$project_file" ]] && { color_echo red "❌ Project '$project_name' does not exist"; return 1; }
+
+    local current_name
+    current_name=$(jq -r '.name' "$project_file")
+    local current_desc
+    current_desc=$(jq -r '.description' "$project_file")
+
+    read -p "Enter new name, empty means keep [ $current_name ]: " new_name
+    read -p "Enter new description, empty means keep the old one: " new_desc
+
+    new_name="${new_name:-$current_name}"
+    new_desc="${new_desc:-$current_desc}"
+
+    # Update JSON
+    jq --arg name "$new_name" --arg desc "$new_desc" \
+       '.name = $name | .description = $desc' \
+       "$project_file" > "$project_file.tmp" && mv "$project_file.tmp" "$project_file"
+
+    # Rename file if name changed
+    if [[ "$new_name" != "$project_name" ]]; then
+        local new_file="$PROJECTS_DIR/$new_name.json"
+        if [[ -f "$new_file" ]]; then
+            color_echo red "❌ Cannot rename: project '$new_name' already exists"
+            return 1
+        fi
+        mv "$project_file" "$new_file"
+        project_file="$new_file"
+    fi
+
+    color_echo green "✅️ Project updated successfully."
+    color_echo blue "   • Name: $current_name → $new_name"
+    color_echo blue "   • Description: $new_desc"
+
+}
+
 
 project_list() {
     color_echo blue "📂 Projects:"
@@ -984,6 +1028,9 @@ main() {
                     ;;
                 remove)
                     project_remove "$@"
+                    ;;
+                edit)
+                    project_edit "$@"
                     ;;
                 list)
                     project_list
