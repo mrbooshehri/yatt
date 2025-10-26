@@ -110,9 +110,19 @@ _yatt_completion() {
         fi
     }
 
+    # Get list of backup files
+    _yatt_backups() {
+        local BACKUP_DIR="$YATT_DIR/backups"
+        if [[ -d "$BACKUP_DIR" ]]; then
+            for f in "$BACKUP_DIR"/*.tar.gz; do
+                [[ -f "$f" ]] && basename "$f"
+            done
+        fi
+    }
+
     case $cword in
         1)
-            COMPREPLY=($(compgen -W "project submodule track help completion" -- "$cur"))
+            COMPREPLY=($(compgen -W "project submodule track backup help completion" -- "$cur"))
             ;;
         2)
             case ${words[1]} in
@@ -124,6 +134,9 @@ _yatt_completion() {
                     ;;
                 track)
                     COMPREPLY=($(compgen -W "start stop status list report" -- "$cur"))
+                    ;;
+                backup)
+                    COMPREPLY=($(compgen -W "create list restore" -- "$cur"))
                     ;;
             esac
             ;;
@@ -158,6 +171,13 @@ _yatt_completion() {
                             local entities=$(_yatt_all_entities)
                             local tags=$(_yatt_all_tags | sed 's/^/tag:/')
                             COMPREPLY=($(compgen -W "$entities $tags" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                backup)
+                    case ${words[2]} in
+                        restore)
+                            COMPREPLY=($(compgen -W "$(_yatt_backups)" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -283,7 +303,7 @@ Examples:
   yatt track report tag:backend                      # All entries with 'backend' tag
   yatt track report tag:backend 2025-10-23           # backend tag on specific date
   yatt backup create                                 # create a backup file under ~/.yatt/backups
-  yatt completion bash > /etc/bash_completion.d/yatt  
+  yatt completion bash > /etc/bash_completion.d/yatt
 EOF
 }
 
@@ -884,7 +904,6 @@ backup_restore() {
     tar -xzf "$backup_file" -C "$HOME"
     color_echo green "✅ Backup restored from '$file'"
 }
-
 
 # -------------------------------
 # Main
