@@ -12,6 +12,7 @@ Manage projects, submodules, tags, and track your work sessions — all from you
 - 🏷️ **Tags** — Add, remove, and filter entities by tags
 - ⏱️ **Time Tracking** — Start, stop, and report on tracked work sessions
 - 📊 **Reports** — Filter sessions by project, module, tag, or date
+- 💾 **Backup Management** — Backup and restore of all YATT data
 - 🎨 **Colored Output** — Clean, readable terminal messages
 - 💡 **Auto Completion** — Built-in Bash completion for faster commands
 
@@ -36,11 +37,29 @@ yatt help
 
 ### 🧠 Enable Bash Completion
 
-Generate and enable command completion:
+Autocompletion helps you quickly navigate available commands and entities.
+
+Enable it by running:
 
 ```bash
-yatt completion > /etc/bash_completion.d/yatt
-source /etc/bash_completion.d/yatt
+yatt completion > ~/.yatt/yatt-completion.sh
+source ~/.yatt/yatt-completion.sh
+```
+
+or append the following line into your `~/.bashrc`
+
+```bash
+if command -v yatt &> /dev/null; then
+    source <(yatt completion)
+fi
+```
+
+Then try typing:
+
+```bash
+yatt [TAB]
+yatt project [TAB]
+yatt backup [TAB]
 ```
 
 ---
@@ -51,6 +70,9 @@ YATT keeps its data under your home directory:
 
 ```
 ~/.yatt/
+├── backups/
+│   ├── yatt_backup_20251020_100322.tar.gz
+│   ├── yatt_backup_20251026_085449.tar.gz
 ├── projects/
 │   ├── myapp.json
 │   └── another_project.json
@@ -112,6 +134,20 @@ yatt track report myapp
 yatt track report tag:backend
 ```
 
+### 💾 Backup Management
+
+```bash
+yatt backup create
+yatt backup list
+yatt backup restore <file>
+```
+
+🗂️ Backups are stored in:
+
+```bash
+~/.yatt/backups/
+```
+
 ---
 
 ## 🧭 Example Workflow
@@ -132,6 +168,14 @@ yatt track stop
 
 # Generate report
 yatt track report tag:golang
+
+# Create a backup
+yatt backup create
+
+# List and restore backups
+yatt backup list
+yatt backup restore yatt_backup_20251026_101530.tar.gz
+
 ```
 
 Output example:
@@ -140,6 +184,11 @@ Output example:
 ✅ Stopped tracking 'api@myapp'. Duration: 01:32:45
 📊 Report for 2025-10-23:
   - api@myapp: 1h 32m 45s
+✅ Backup created: /home/mhmd/.yatt/backups/yatt_backup_20251026_101530.tar.gz
+📦 Available backups:
+  - yatt_backup_20251026_101530.tar.gz
+⚠️  This will overwrite your current YATT data. Continue? (y/N): y
+✅ Backup restored from 'yatt_backup_20251026_101530.tar.gz'
 ```
 
 ---
