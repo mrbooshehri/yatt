@@ -272,12 +272,12 @@ Time tracking:
   track status                                       Show the currently active session with elapsed time
   track list [project|module@project]                List all tracked sessions (optional filter)
   track report [project|module@project|tag:tagname] [YYYY-MM-DD]
-                                                     Show report with optional filters:
-                                                     - No args: today's report
-                                                     - project/module: filter by project/module
-                                                     - tag:tagname: filter by tag
-                                                     - date: specific day's report
-                                                     - Any combination of filter + date
+    Show report with optional filters:
+      - No args: today's report
+      - project/module: filter by project/module
+      - tag:tagname: filter by tag
+      - date: specific day's report
+      - Any combination of filter + date
 
 Backup management:
   backup create                                      Create a backup of all YATT data
