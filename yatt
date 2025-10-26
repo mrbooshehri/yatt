@@ -130,7 +130,7 @@ _yatt_completion() {
                     COMPREPLY=($(compgen -W "create remove list tags" -- "$cur"))
                     ;;
                 submodule)
-                    COMPREPLY=($(compgen -W "create remove list" -- "$cur"))
+                    COMPREPLY=($(compgen -W "create remove list tags" -- "$cur"))
                     ;;
                 track)
                     COMPREPLY=($(compgen -W "start stop status list report" -- "$cur"))
@@ -159,6 +159,9 @@ _yatt_completion() {
                             ;;
                         list)
                             COMPREPLY=($(compgen -W "$(_yatt_projects)" -- "$cur"))
+                            ;;
+                        tags)
+                            COMPREPLY=($(compgen -W "add remove list by" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -199,6 +202,20 @@ _yatt_completion() {
                             ;;
                     esac
                     ;;
+                submodule)
+                    case ${words[2]} in
+                        tags)
+                            case ${words[3]} in
+                                add|remove|list)
+                                    COMPREPLY=($(compgen -W "$(_yatt_all_entities | grep @)" -- "$cur"))
+                                    ;;
+                                by)
+                                    COMPREPLY=($(compgen -W "$(_yatt_all_tags)" -- "$cur"))
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
                 track)
                     case ${words[2]} in
                         report)
@@ -223,6 +240,22 @@ _yatt_completion() {
                                     ;;
                                 remove)
                                     # For remove, only show tags from the selected entity
+                                    COMPREPLY=($(compgen -W "$(_yatt_entity_tags "${words[4]}")" -- "$cur"))
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                submodule)
+                    case ${words[2]} in
+                        tags)
+                            case ${words[3]} in
+                                add)
+                                    # For add, show all tags as suggestions
+                                    COMPREPLY=($(compgen -W "$(_yatt_all_tags)" -- "$cur"))
+                                    ;;
+                                remove)
+                                    # For remove, only show tags from the selected submodule
                                     COMPREPLY=($(compgen -W "$(_yatt_entity_tags "${words[4]}")" -- "$cur"))
                                     ;;
                             esac
@@ -265,6 +298,10 @@ Submodule management:
   submodule create <name>@<project> [description]    Create a submodule under a project
   submodule remove <name>@<project>                  Remove a submodule
   submodule list <project>                           List submodules of a project with details
+  submodule tags add <module@project> <tag>          Add a tag to submodule
+  submodule tags remove <module@project> <tag>       Remove a tag from submodule
+  submodule tags list <module@project>               List tags of a submodule
+  submodule tags by <tag>                            List all submodules with the specified tag
 
 Time tracking:
   track start <project|module@project>               Start tracking time
@@ -273,11 +310,11 @@ Time tracking:
   track list [project|module@project]                List all tracked sessions (optional filter)
   track report [project|module@project|tag:tagname] [YYYY-MM-DD]
     Show report with optional filters:
-      - No args: today's report
-      - project/module: filter by project/module
-      - tag:tagname: filter by tag
-      - date: specific day's report
-      - Any combination of filter + date
+    - No args: today's report
+    - project/module: filter by project/module
+    - tag:tagname: filter by tag
+    - date: specific day's report
+    - Any combination of filter + date
 
 Backup management:
   backup create                                      Create a backup of all YATT data
@@ -351,13 +388,29 @@ project_list() {
         [[ -f "$f" ]] || continue
         local project
         project=$(basename "$f" .json)
-        color_echo purple "  - $project"
+        
+        local desc tags
+        desc=$(jq -r '.description // "No description"' "$f")
+        tags=$(jq -r '.tags[]?' "$f" | tr '\n' ', ' | sed 's/,$//')
+        
+        color_echo purple "  📁 $project"
+        color_echo blue "     Description: $desc"
+        if [[ -n "$tags" ]]; then
+            color_echo yellow "     Tags: $tags"
+        else
+            color_echo yellow "     Tags: (none)"
+        fi
+        
         local modules
         modules=$(jq -r '.modules[].name?' "$f")
-        while IFS= read -r m; do
-            [[ -z "$m" ]] && continue
-            color_echo cyan "      * $m"
-        done <<< "$modules"
+        if [[ -n "$modules" ]]; then
+            color_echo cyan "     Submodules:"
+            while IFS= read -r m; do
+                [[ -z "$m" ]] && continue
+                color_echo cyan "       * $m"
+            done <<< "$modules"
+        fi
+        echo ""
     done
 }
 
@@ -974,6 +1027,7 @@ main() {
                 *) help ;;
             esac
             ;;
+
         backup)
             local sub="$1"; shift || true
             case "$sub" in
@@ -983,6 +1037,7 @@ main() {
                 *) show_help ;;
             esac
             ;;
+
         submodule)
             local sub="$1"; shift || true
             case "$sub" in
@@ -996,6 +1051,27 @@ main() {
                     ;;
                 list)
                     submodule_list "$@"
+                    ;;
+                tags)
+                    local tagcmd="$1"; shift || true
+                    case "$tagcmd" in
+                        add)
+                            tags_add "$@"
+                            ;;
+                        remove)
+                            tags_remove "$@"
+                            ;;
+                        list)
+                            tags_list "$@"
+                            ;;
+                        by)
+                            tags_by "$@"
+                            ;;
+                        *)
+                            color_echo red "❌ Unknown tag command: $tagcmd"
+                            help
+                            ;;
+                    esac
                     ;;
                 *)
                     color_echo red "❌ Unknown submodule subcommand: $sub"
