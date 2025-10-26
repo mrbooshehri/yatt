@@ -130,7 +130,7 @@ _yatt_completion() {
                     COMPREPLY=($(compgen -W "create remove list edit tags" -- "$cur"))
                     ;;
                 submodule)
-                    COMPREPLY=($(compgen -W "create remove list tags" -- "$cur"))
+                    COMPREPLY=($(compgen -W "create remove list edit tags" -- "$cur"))
                     ;;
                 track)
                     COMPREPLY=($(compgen -W "start stop status list report" -- "$cur"))
@@ -158,6 +158,9 @@ _yatt_completion() {
                 submodule)
                     case ${words[2]} in
                         remove)
+                            COMPREPLY=($(compgen -W "$(_yatt_all_entities | grep @)" -- "$cur"))
+                            ;;
+                        edit)
                             COMPREPLY=($(compgen -W "$(_yatt_all_entities | grep @)" -- "$cur"))
                             ;;
                         list)
@@ -301,6 +304,7 @@ Tag management:
 Submodule management:
   submodule create <name>@<project> [description]    Create a submodule under a project
   submodule remove <name>@<project>                  Remove a submodule
+  submodule edit <name>@<project>                    Edit submodule name or description
   submodule list <project>                           List submodules of a project with details
   submodule tags add <module@project> <tag>          Add a tag to submodule
   submodule tags remove <module@project> <tag>       Remove a tag from submodule
@@ -496,6 +500,62 @@ submodule_remove() {
 
     jq --arg m "$module" '.modules |= map(select(.name != $m))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
     color_echo green "✅ Submodule '$module@$parent' removed."
+}
+
+submodule_edit() {
+    local full="${1:-}"
+    [[ -z "$full" ]] && { color_echo red "❌ Usage: submodule edit <module@project>"; return 1; }
+
+    local module="${full%@*}"
+    local parent="${full#*@}"
+    local file="$PROJECTS_DIR/$parent.json"
+
+    # Validate project file
+    [[ ! -f "$file" ]] && { color_echo red "❌ Parent project '$parent' does not exist."; return 1; }
+
+    # Check module exists and grab current values
+    if ! echo "$module" | grep -q .; then
+        color_echo red "❌ Invalid module@project: $full"
+        return 1
+    fi
+
+    # Get module JSON object (if it exists)
+    local module_json
+    module_json=$(jq -c --arg m "$module" '.modules[] | select(.name == $m)' "$file" 2>/dev/null) || true
+    if [[ -z "$module_json" ]]; then
+        color_echo red "❌ Submodule '$module' not found in project '$parent'."
+        return 1
+    fi
+
+    # Extract current values
+    local current_name current_desc
+    current_name=$(echo "$module_json" | jq -r '.name')
+    current_desc=$(echo "$module_json" | jq -r '.description // ""')
+
+    # Interactive prompts
+    read -p "Enter new name, empty means keep [ $current_name ]: " new_name
+    read -p "Enter new description, empty means keep the old one: " new_desc
+
+    # Default to old values if empty
+    new_name="${new_name:-$current_name}"
+    new_desc="${new_desc:-$current_desc}"
+
+    # If name changed, ensure no other module in the project has that name
+    if [[ "$new_name" != "$current_name" ]]; then
+        if jq -e --arg nm "$new_name" '.modules[] | select(.name == $nm)' "$file" >/dev/null 2>&1; then
+            color_echo red "❌ Cannot rename: a submodule named '$new_name' already exists in project '$parent'."
+            return 1
+        fi
+    fi
+
+    # Perform the update: update name and description for the matching module
+    jq --arg old "$current_name" --arg new "$new_name" --arg desc "$new_desc" \
+       '.modules = (.modules | map(if .name == $old then (.name = $new) | (.description = $desc) else . end))' \
+       "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+
+    color_echo green "✅ Submodule updated in project '$parent'."
+    color_echo blue "   • Name: $current_name → $new_name"
+    color_echo blue "   • Description: $new_desc"
 }
 
 submodule_list() {
@@ -1096,6 +1156,9 @@ main() {
                     ;;
                 remove)
                     submodule_remove "$@"
+                    ;;
+                edit)
+                    submodule_edit "$@"
                     ;;
                 list)
                     submodule_list "$@"
