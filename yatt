@@ -290,6 +290,7 @@ Project management:
   project create <name> [description]                Create a new project
   project remove <name>                              Delete an existing project (asks for confirmation)
   project list                                       List projects and their submodules
+  project edit <name>                                Edit project name or description  
 
 Tag management:
   project tags add <project|module@project> <tag>    Add a tag (duplicates prevented)
