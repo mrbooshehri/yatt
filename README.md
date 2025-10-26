@@ -7,7 +7,7 @@ Manage projects, submodules, tags, and track your work sessions — all from you
 
 ## ✨ Features
 
-- 🗂️ **Project Management** — Create, list, and remove projects
+- 🗂️ **Project Management** — Create, list, edit, and remove projects
 - 🧩 **Submodules** — Organize components or microservices under projects
 - 🏷️ **Tags** — Add, remove, and filter entities by tags
 - ⏱️ **Time Tracking** — Start, stop, and report on tracked work sessions
@@ -89,6 +89,7 @@ YATT keeps its data under your home directory:
 yatt project create myapp "Main backend project"
 yatt project list
 yatt project remove myapp
+yatt project edit myapp
 ```
 
 ### 🧩 Submodules
@@ -253,6 +254,7 @@ Tracking sessions are stored in `~/.yatt/tracking.json`:
 | `project create <name> [desc]`        | Create a new project                         |
 | `project remove <name>`               | Delete a project                             |
 | `project list`                        | List all projects and submodules             |
+| `project edit`                        | Edit project name or description             |
 | `project tags add/remove/list/by`     | Manage tags                                  |
 | `submodule create/remove/list`        | Manage submodules                            |
 | `track start/stop/status/list/report` | Manage tracking sessions                     |
