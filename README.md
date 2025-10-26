@@ -248,16 +248,19 @@ Tracking sessions are stored in `~/.yatt/tracking.json`:
 
 ## 🧩 Command Overview
 
-| Command                               | Description                      |
-| ------------------------------------- | -------------------------------- |
-| `project create <name> [desc]`        | Create a new project             |
-| `project remove <name>`               | Delete a project                 |
-| `project list`                        | List all projects and submodules |
-| `project tags add/remove/list/by`     | Manage tags                      |
-| `submodule create/remove/list`        | Manage submodules                |
-| `track start/stop/status/list/report` | Manage tracking sessions         |
-| `completion`                          | Generate Bash completion script  |
-| `help`                                | Show full usage guide            |
+| Command                               | Description                                  |
+| ------------------------------------- | -------------------------------------------- |
+| `project create <name> [desc]`        | Create a new project                         |
+| `project remove <name>`               | Delete a project                             |
+| `project list`                        | List all projects and submodules             |
+| `project tags add/remove/list/by`     | Manage tags                                  |
+| `submodule create/remove/list`        | Manage submodules                            |
+| `track start/stop/status/list/report` | Manage tracking sessions                     |
+| `backup create`                       | Create a new backup                          |
+| `backup list`                         | List of backup files under `~/.yatt/backups` |
+| `backup restore <file>`               | Restore a backup file                        |
+| `completion`                          | Generate Bash completion script              |
+| `help`                                | Show full usage guide                        |
 
 ---
 
