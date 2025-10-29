@@ -85,11 +85,25 @@ _yatt_completion() {
         done
     }
 
+    # Get tasks for a project or submodule
+    _yatt_tasks() {
+        local target="$1"
+        if [[ "$target" == *@* ]]; then
+            local module="${target%@*}"
+            local project="${target#*@}"
+            local file="$PROJECTS_DIR/$project.json"
+            [[ -f "$file" ]] && jq -r --arg m "$module" '.modules[] | select(.name==$m) | .tasks[].title' "$file" 2>/dev/null
+        else
+            local file="$PROJECTS_DIR/$target.json"
+            [[ -f "$file" ]] && jq -r '.tasks[].title' "$file" 2>/dev/null
+        fi
+    }
+
     # Get all tags
     _yatt_all_tags() {
         if [[ -d "$PROJECTS_DIR" ]]; then
             for f in "$PROJECTS_DIR"/*.json; do
-                [[ -f "$f" ]] && jq -r '.tags[]?, .modules[].tags[]?' "$f" 2>/dev/null
+                [[ -f "$f" ]] && jq -r '.tags[]?, .modules[].tags[]?, .tasks[].tags[]?, .modules[].tasks[].tags[]?' "$f" 2>/dev/null
             done | sort -u
         fi
     }
@@ -122,7 +136,7 @@ _yatt_completion() {
 
     case $cword in
         1)
-            COMPREPLY=($(compgen -W "project submodule track backup help completion" -- "$cur"))
+            COMPREPLY=($(compgen -W "project submodule track task backup help completion" -- "$cur"))
             ;;
         2)
             case ${words[1]} in
@@ -134,6 +148,9 @@ _yatt_completion() {
                     ;;
                 track)
                     COMPREPLY=($(compgen -W "start stop status list report" -- "$cur"))
+                    ;;
+                task)
+                    COMPREPLY=($(compgen -W "create list update" -- "$cur"))
                     ;;
                 backup)
                     COMPREPLY=($(compgen -W "create list restore" -- "$cur"))
@@ -183,6 +200,16 @@ _yatt_completion() {
                             ;;
                     esac
                     ;;
+                task)
+                    case ${words[2]} in
+                        create|list)
+                            COMPREPLY=($(compgen -W "$(_yatt_all_entities)" -- "$cur"))
+                            ;;
+                        update)
+                            COMPREPLY=($(compgen -W "$(_yatt_all_entities)" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
                 backup)
                     case ${words[2]} in
                         restore)
@@ -219,6 +246,13 @@ _yatt_completion() {
                                     COMPREPLY=($(compgen -W "$(_yatt_all_tags)" -- "$cur"))
                                     ;;
                             esac
+                            ;;
+                    esac
+                    ;;
+                task)
+                    case ${words[2]} in
+                        update)
+                            COMPREPLY=($(compgen -W "$(_yatt_tasks "${words[3]}")" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -268,6 +302,13 @@ _yatt_completion() {
                             ;;
                     esac
                     ;;
+                task)
+                    case ${words[2]} in
+                        update)
+                            COMPREPLY=($(compgen -W "todo doing done verified" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
             esac
             ;;
     esac
@@ -311,6 +352,11 @@ Submodule management:
   submodule tags list <module@project>               List tags of a submodule
   submodule tags by <tag>                            List all submodules with the specified tag
 
+Task management:
+  task create <project|module@project>               Create a new task with interactive prompts
+  task list <project|module@project>                 List all tasks for a project or submodule
+  task update <project|module@project> <title> <state> Update task state (todo/doing/done/verified)
+
 Time tracking:
   track start <project|module@project>               Start tracking time
   track stop                                         Stop the active tracking session
@@ -339,6 +385,10 @@ Examples:
   yatt project create myapp "Main backend project"
   yatt submodule create auth@myapp "Authentication service"
   yatt project tags add myapp backend
+  yatt task create myapp                            # Create a task in myapp project
+  yatt task create auth@myapp                       # Create a task in auth submodule
+  yatt task list myapp                              # List all tasks in myapp project
+  yatt task update myapp "Setup CI" doing           # Update task state
   yatt track start myapp
   yatt track stop
   yatt track report                                  # Today's report
@@ -366,7 +416,7 @@ project_create() {
         exit 1
     fi
 
-    jq -n --arg n "$name" --arg d "$desc" '{name:$n, description:$d, tags:[], modules:[]}' > "$file"
+    jq -n --arg n "$name" --arg d "$desc" '{name:$n, description:$d, tags:[], modules:[], tasks:[]}' > "$file"
     color_echo green "✅ Project '$name' created."
 }
 
@@ -484,7 +534,7 @@ submodule_create() {
         exit 1
     fi
 
-    jq --arg m "$module" --arg d "$desc" '.modules += [{"name":$m, "description":$d, "tags":[]}]' "$file" \
+    jq --arg m "$module" --arg d "$desc" '.modules += [{"name":$m, "description":$d, "tags":[], "tasks":[]}]' "$file" \
        > "$file.tmp" && mv "$file.tmp" "$file"
 
     color_echo green "✅ Submodule '$module@$parent' created."
@@ -603,6 +653,183 @@ submodule_list() {
         echo ""
     done <<< "$modules"
 }
+
+# -------------------------------
+# Task Management
+# -------------------------------
+task_create() {
+    local target="$1"
+    
+    # Parse target to determine if it's a project or submodule
+    local project_name module_name file
+    if [[ "$target" == *@* ]]; then
+        # Submodule target
+        module_name="${target%@*}"
+        project_name="${target#*@}"
+        file="$PROJECTS_DIR/$project_name.json"
+        
+        # Verify project exists
+        [[ ! -f "$file" ]] && { color_echo red "❌ Project '$project_name' does not exist."; return 1; }
+        
+        # Verify submodule exists
+        if ! jq -e --arg m "$module_name" '.modules[] | select(.name==$m)' "$file" >/dev/null; then
+            color_echo red "❌ Submodule '$module_name' does not exist in project '$project_name'."
+            return 1
+        fi
+    else
+        # Project target
+        project_name="$target"
+        file="$PROJECTS_DIR/$project_name.json"
+        [[ ! -f "$file" ]] && { color_echo red "❌ Project '$project_name' does not exist."; return 1; }
+    fi
+
+    # Interactive prompts for task details
+    read -p "Enter task title: " title
+    [[ -z "$title" ]] && { color_echo red "❌ Task title cannot be empty."; return 1; }
+    
+    read -p "Enter task description (optional): " description
+    
+    read -p "Enter duration estimate (in hours, optional): " duration
+    [[ -n "$duration" ]] && duration=$(echo "$duration * 3600" | bc)  # Convert to seconds
+    
+    read -p "Enter tags (comma-separated, optional): " tags_input
+    local tags_array="[]"
+    if [[ -n "$tags_input" ]]; then
+        # Convert comma-separated string to JSON array, removing whitespace
+        tags_array=$(echo "$tags_input" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R . | jq -s .)
+    fi
+    
+    PS3="Select task state (default: todo): "
+    select state in "todo" "doing" "done" "verified"; do
+        break
+    done
+    state="${state:-todo}"
+
+    # Create task object
+    local task_json
+    task_json=$(jq -n \
+        --arg title "$title" \
+        --arg desc "$description" \
+        --arg state "$state" \
+        --argjson duration "${duration:-null}" \
+        --argjson tags "$tags_array" \
+        '{
+            title: $title,
+            description: $desc,
+            state: $state,
+            duration: $duration,
+            tags: $tags,
+            created_at: (now | todate)
+        }')
+
+    # Update the project file
+    if [[ "$target" == *@* ]]; then
+        # Add task to submodule
+        jq --arg m "$module_name" \
+           --argjson task "$task_json" \
+           '.modules = (.modules | map(
+                if .name == $m then
+                    if .tasks then .tasks += [$task]
+                    else . + {tasks: [$task]}
+                    end
+                else .
+                end
+            ))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    else
+        # Add task to project
+        jq --argjson task "$task_json" \
+           'if .tasks then .tasks += [$task] else . + {tasks: [$task]} end' \
+           "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    fi
+
+    color_echo green "✅ Task '$title' created for ${module_name:+submodule }'$target'."
+}
+
+task_list() {
+    local target="$1"
+    
+    if [[ "$target" == *@* ]]; then
+        # List submodule tasks
+        local module="${target%@*}"
+        local project="${target#*@}"
+        local file="$PROJECTS_DIR/$project.json"
+        
+        [[ ! -f "$file" ]] && { color_echo red "❌ Project '$project' does not exist."; return 1; }
+        
+        color_echo blue "📋 Tasks for submodule '$module' in project '$project':"
+        jq -r --arg m "$module" '
+            .modules[] | 
+            select(.name == $m) |
+            .tasks[] |
+            "  • \(.title) [\(.state)]" +
+            if .description then "\n    Description: \(.description)" else "" end +
+            if .duration then "\n    Duration: \(.duration/3600|floor)h \((.duration%3600/60)|floor)m" else "" end +
+            if .tags|length > 0 then "\n    Tags: \(.tags|join(", "))" else "" end +
+            "\n"
+        ' "$file" 2>/dev/null || color_echo yellow "No tasks found."
+    else
+        # List project tasks
+        local file="$PROJECTS_DIR/$target.json"
+        [[ ! -f "$file" ]] && { color_echo red "❌ Project '$target' does not exist."; return 1; }
+        
+        color_echo blue "📋 Tasks for project '$target':"
+        jq -r '
+            .tasks[] |
+            "  • \(.title) [\(.state)]" +
+            if .description then "\n    Description: \(.description)" else "" end +
+            if .duration then "\n    Duration: \(.duration/3600|floor)h \((.duration%3600/60)|floor)m" else "" end +
+            if .tags|length > 0 then "\n    Tags: \(.tags|join(", "))" else "" end +
+            "\n"
+        ' "$file" 2>/dev/null || color_echo yellow "No tasks found."
+    fi
+}
+
+task_update_state() {
+    local target="$1"
+    local task_title="$2"
+    local new_state="$3"
+    
+    local file
+    if [[ "$target" == *@* ]]; then
+        # Update submodule task
+        local module="${target%@*}"
+        local project="${target#*@}"
+        file="$PROJECTS_DIR/$project.json"
+        
+        [[ ! -f "$file" ]] && { color_echo red "❌ Project '$project' does not exist."; return 1; }
+        
+        jq --arg m "$module" \
+           --arg title "$task_title" \
+           --arg state "$new_state" \
+           '.modules = (.modules | map(
+                if .name == $m then
+                    .tasks = (.tasks | map(
+                        if .title == $title then
+                            .state = $state
+                        else .
+                        end
+                    ))
+                else .
+                end
+            ))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    else
+        # Update project task
+        file="$PROJECTS_DIR/$target.json"
+        [[ ! -f "$file" ]] && { color_echo red "❌ Project '$target' does not exist."; return 1; }
+        
+        jq --arg title "$task_title" \
+           --arg state "$new_state" \
+           '.tasks = (.tasks | map(
+                if .title == $title then
+                    .state = $state
+                else .
+                    end
+            ))' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    fi
+    
+    color_echo green "✅ Task '$task_title' state updated to '$new_state'."
+}
+
 
 # -------------------------------
 # Tag commands
@@ -1119,6 +1346,31 @@ main() {
                     ;;
                 *)
                     color_echo red "❌ Unknown project subcommand: $sub"
+                    help
+                    ;;
+            esac
+            ;;
+
+        task)
+            local sub="$1"; shift || true
+            case "$sub" in
+                create)
+                    [[ $# -eq 0 ]] && { color_echo red "❌ Usage: task create <project|module@project>"; exit 1; }
+                    task_create "$@"
+                    ;;
+                list)
+                    [[ $# -eq 0 ]] && { color_echo red "❌ Usage: task list <project|module@project>"; exit 1; }
+                    task_list "$@"
+                    ;;
+                update)
+                    [[ $# -lt 3 ]] && { color_echo red "❌ Usage: task update <project|module@project> <task_title> <new_state>"; exit 1; }
+                    local target="$1"
+                    local title="$2"
+                    local state="$3"
+                    task_update_state "$target" "$title" "$state"
+                    ;;
+                *)
+                    color_echo red "❌ Unknown task subcommand: $sub"
                     help
                     ;;
             esac
