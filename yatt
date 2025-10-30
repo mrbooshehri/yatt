@@ -379,7 +379,7 @@ Submodule management:
   submodule tags by <tag>                            List all submodules with the specified tag
 
 Task management:
-  task create <project|module@project> <title>       Create a new task (title can have spaces)
+  task create <project|module@project> [title]       Create a new task
   task list <project|module@project>                 List all tasks for a project or submodule
   task update <project|module@project> <title> <state> Update task state (todo/doing/done/verified)
   task edit <project|module@project> <title>         Edit task details interactively
