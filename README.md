@@ -9,8 +9,9 @@ Manage projects, submodules, tags, and track your work sessions — all from you
 
 - 🗂️ **Project Management** — Create, list, edit, and remove projects
 - 🧩 **Submodules** — Organize components or microservices under projects
+- 📝 **Task Management** — Create, list, update states (todo/doing/done/verified), edit, and remove tasks
 - 🏷️ **Tags** — Add, remove, and filter entities by tags
-- ⏱️ **Time Tracking** — Start, stop, and report on tracked work sessions
+- ⏱️ **Task Time Tracking** — Track time for projects/modules or specific tasks; auto-log durations
 - 📊 **Reports** — Filter sessions by project, module, tag, or date
 - 💾 **Backup Management** — Backup and restore of all YATT data
 - 🎨 **Colored Output** — Clean, readable terminal messages
@@ -100,6 +101,19 @@ yatt submodule list myapp
 yatt submodule remove auth@myapp
 ```
 
+### 📝 Tasks (w/ States & Time Logs)
+```bash
+# Create tasks (titles support spaces!)
+yatt task create myapp "Setup CI/CD"
+yatt task create auth@myapp "Implement OAuth2"
+
+# List & manage
+yatt task list myapp
+yatt task update myapp "Setup CI/CD"
+yatt task edit auth@myapp "OAuth2"
+yatt task remove myapp "Setup CI/CD"
+```
+
 ### 🏷️ Tag Management
 
 ```bash
@@ -112,11 +126,19 @@ yatt project tags by backend
 ### ⏱️ Time Tracking
 
 ```bash
+# Track project
 yatt track start myapp
-# ...work...
-yatt track stop
+# Track **specific task** 👈
+yatt track start myapp "Setup CI/CD"
+# Live elapsed timer
 yatt track status
-yatt track list
+
+# ...work...
+
+# Logs duration to task!
+yatt track stop
+# Filtered history
+yatt track list myapp
 ```
 
 ### 📈 Reports
@@ -149,34 +171,45 @@ yatt backup restore <file>
 ~/.yatt/backups/
 ```
 
+**Sample Output:**
+
+```bash
+📅 Report for 2025-10-30 (filtered by: myapp)
+  • myapp: 02:45:12
+      - Task: Setup CI/CD: 01:23:45
+  • auth@myapp: 01:21:30
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total time: 04:06:42
+
+📊 Task Time Summary:
+  • myapp :: Setup CI/CD
+      Total: 01:23:45 (2 sessions)
+```
+
+
 ---
 
 ## 🧭 Example Workflow
 
 ```bash
-# Create project and submodule
-yatt project create myapp "Main backend service"
-yatt submodule create api@myapp "REST API module"
+# Setup
+yatt project create backend "My API"
+yatt submodule create api@backend "REST API"
+yatt project tags add backend golang
 
-# Add tags
-yatt project tags add myapp backend
-yatt project tags add api@myapp golang
+# Tasks
+yatt task create backend "Init project"
+yatt task create api@backend "User endpoints"
 
-# Track work
-yatt track start api@myapp
-# ... do some work ...
+# Track
+yatt track start api@backend "User endpoints"
+# 💻 work...
 yatt track stop
 
-# Generate report
+# Report
 yatt track report tag:golang
-
-# Create a backup
 yatt backup create
-
-# List and restore backups
-yatt backup list
-yatt backup restore yatt_backup_20251026_101530.tar.gz
-
 ```
 
 Output example:
@@ -202,7 +235,6 @@ Make sure these tools are installed:
 | ----------- | ----------------- | --------------------- |
 | `bash`      | Script runtime    | built-in              |
 | `jq`        | JSON processing   | `sudo apt install jq` |
-| `coreutils` | Date & time utils | usually preinstalled  |
 
 ---
 
@@ -215,15 +247,16 @@ Example `myapp.json`:
 ```json
 {
   "name": "myapp",
-  "description": "Main backend project",
+  "description": "...",
   "tags": ["backend"],
-  "modules": [
+  "tasks": [
     {
-      "name": "auth",
-      "description": "Authentication service",
-      "tags": ["security", "jwt"]
+      "title": "Setup CI/CD",
+      "state": "done",
+      "real_duration": [{"start": "...", "duration_seconds": 5000}]
     }
-  ]
+  ],
+  "modules": [{"name": "auth", "tasks": [...]}]
 }
 ```
 
@@ -233,15 +266,11 @@ Tracking sessions are stored in `~/.yatt/tracking.json`:
 {
   "active_session": null,
   "sessions": [
-    {
-      "name": "auth@myapp",
-      "start": "2025-10-23T14:00:00+03:30",
-      "end": "2025-10-23T15:30:00+03:30",
-      "duration_seconds": 5400,
-      "date": "2025-10-23",
-      "tags": ["security", "jwt"]
-    }
-  ]
+    { "name": "api@backend", 
+      "duration_seconds": 5400, 
+      "tags": ["golang"]
+      }
+    ]
 }
 ```
 
@@ -249,20 +278,15 @@ Tracking sessions are stored in `~/.yatt/tracking.json`:
 
 ## 🧩 Command Overview
 
-| Command                               | Description                                  |
-| ------------------------------------- | -------------------------------------------- |
-| `project create <name> [desc]`        | Create a new project                         |
-| `project remove <name>`               | Delete a project                             |
-| `project list`                        | List all projects and submodules             |
-| `project edit`                        | Edit project name or description             |
-| `project tags add/remove/list/by`     | Manage tags                                  |
-| `submodule create/remove/list`        | Manage submodules                            |
-| `track start/stop/status/list/report` | Manage tracking sessions                     |
-| `backup create`                       | Create a new backup                          |
-| `backup list`                         | List of backup files under `~/.yatt/backups` |
-| `backup restore <file>`               | Restore a backup file                        |
-| `completion`                          | Generate Bash completion script              |
-| `help`                                | Show full usage guide                        |
+| Category | Commands |
+| -------- | -------- |
+| Project | `create <name> [desc] remove <name> list edit <name> tags add/remove/list/by <entity> [tag]` |
+| Submodule | `create <mod>@<proj> [desc] remove/edit/list <mod>@<proj> tags ... (same as project)` |
+| Task | `create <entity> <title> list <entity> update <entity> <title> <state> edit/remove <entity> <title>` |
+| Track | `start <entity> [task] stop status list [filter] report [filter] [date]` |
+| Backup | `create list restore <file>` |
+| Other | `completion help` |
+
 
 ---
 
@@ -271,6 +295,16 @@ Tracking sessions are stored in `~/.yatt/tracking.json`:
 * Use **tags** to group related work sessions.
 * Run `yatt track report tag:<tag>` to see time spent on all tasks with that tag.
 * Add YATT to your `.bashrc` or `.zshrc` completion for seamless use.
+
+---
+
+## 💡 Pro Tips
+
+Task Tracking 🚀: track start entity task_title → auto-logs to task!
+Tags Everywhere: Filter reports: track report tag:security
+States: todo → doing → done → verified
+Aliases: Add alias t='yatt track' to .bashrc
+Daily Report: alias today='yatt track report'
 
 ---
 
