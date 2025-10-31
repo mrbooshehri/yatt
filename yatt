@@ -94,12 +94,12 @@ _yatt_completion() {
             local project="${target#*@}"
             local file="$PROJECTS_DIR/$project.json"
             [[ -f "$file" ]] && jq -r --arg m "$module" '.modules[] | select(.name==$m) | .tasks[].title' "$file" 2>/dev/null | while IFS= read -r line; do
-                printf '%q\n' "$line"
+                printf '"%s"\n' "$line"
             done
         else
             local file="$PROJECTS_DIR/$target.json"
             [[ -f "$file" ]] && jq -r '.tasks[].title' "$file" 2>/dev/null | while IFS= read -r line; do
-                printf '%q\n' "$line"
+                printf '"%s"\n' "$line"
             done
         fi
     }
@@ -257,14 +257,11 @@ _yatt_completion() {
                 task)
                     case ${words[2]} in
                         update|edit|remove)
-                            # Don't use compgen -W for multi-word completions
-                            # Build COMPREPLY array directly
                             local IFS=$'\n'
                             local tasks=($(_yatt_tasks "${words[3]}"))
                             COMPREPLY=()
                             for task in "${tasks[@]}"; do
-                                # Check if task matches the current word
-                                if [[ $task == "$cur"* ]]; then
+                                if [[ $task == "$cur"* ]] || [[ $cur == "" ]]; then
                                     COMPREPLY+=("$task")
                                 fi
                             done
@@ -285,7 +282,7 @@ _yatt_completion() {
                             local tasks=($(_yatt_tasks "${words[3]}"))
                             COMPREPLY=()
                             for task in "${tasks[@]}"; do
-                                if [[ $task == "$cur"* ]]; then
+                                if [[ $task == "$cur"* ]] || [[ $cur == "" ]]; then
                                     COMPREPLY+=("$task")
                                 fi
                             done
